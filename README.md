@@ -2,6 +2,8 @@
 
 Utilise une tablette ou un téléphone Android comme écran étendu d'un PC Windows, en Wi-Fi ou en USB, avec tactile, clavier, stylet et son. Windows le voit comme un vrai moniteur. En français, réalisé avec Claude.
 
+**[Télécharger](https://github.com/36txXnxTrGXgSH/36Screenlink/releases/latest)** · **[Page de présentation](https://36txxnxtrgxgsh.github.io/36Screenlink/)**
+
 ## Installation
 
 Dans la page **Releases** du dépôt :

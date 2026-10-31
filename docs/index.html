@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>36Screenlink — la tablette Android, vrai écran de Windows</title>
+<meta name="description" content="36Screenlink transforme une tablette ou un téléphone Android en écran étendu d'un PC Windows, en USB ou en Wi-Fi, avec tactile, clavier, stylet et son. Windows le voit comme un vrai moniteur.">
+<meta property="og:title" content="36Screenlink — la tablette Android, vrai écran de Windows">
+<meta property="og:description" content="Un vrai moniteur Windows sur votre tablette, en USB ou en Wi-Fi, avec tactile, clavier, stylet et son. En français, sans compte.">
+<meta property="og:image" content="https://36txxnxtrgxgsh.github.io/36Screenlink/images/01-accueil.png">
+<style>
+  :root {
+    --fond: #0e1116;
+    --fond-2: #141922;
+    --carte: #1a202b;
+    --trait: #2a3340;
+    --texte: #ecf1f6;
+    --texte-2: #a7b3c2;
+    --accent: #22d3ee;
+    --accent-2: #6366f1;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--fond);
+    color: var(--texte);
+    font: 17px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, sans-serif;
+  }
+  a { color: var(--accent); }
+  .page { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+
+  /* ---- en-tête */
+  header.hero {
+    background:
+      radial-gradient(900px 500px at 80% 0%, rgba(34, 211, 238, .14), transparent 70%),
+      radial-gradient(700px 420px at 0% 100%, rgba(99, 102, 241, .16), transparent 70%),
+      var(--fond);
+    border-bottom: 1px solid var(--trait);
+  }
+  .hero .page { padding-top: 72px; padding-bottom: 56px; }
+  .marque { font-size: 15px; letter-spacing: .12em; text-transform: uppercase; color: var(--accent); font-weight: 700; }
+  h1 { font-size: clamp(34px, 5vw, 56px); line-height: 1.08; margin: 12px 0 18px; letter-spacing: -.02em; max-width: 16em; }
+  .accroche { font-size: 20px; color: var(--texte-2); max-width: 40em; margin: 0 0 28px; }
+  .boutons { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 24px; }
+  .bouton {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 13px 22px; border-radius: 999px;
+    font-weight: 650; text-decoration: none; font-size: 16px;
+  }
+  .bouton.plein { background: var(--accent); color: #04232a; }
+  .bouton.plein:hover { background: #67e8f9; }
+  .bouton.contour { border: 1px solid var(--trait); color: var(--texte); }
+  .bouton.contour:hover { border-color: var(--accent); }
+  .pastilles { display: flex; flex-wrap: wrap; gap: 8px; padding: 0; margin: 0 0 40px; list-style: none; }
+  .pastilles li {
+    font-size: 14px; color: var(--texte-2);
+    border: 1px solid var(--trait); border-radius: 999px; padding: 5px 12px;
+  }
+  .ecran {
+    display: block; width: 100%; height: auto;
+    border-radius: 14px; border: 1px solid var(--trait);
+    box-shadow: 0 30px 80px rgba(0, 0, 0, .55);
+    background: var(--fond-2);
+  }
+
+  /* ---- sections */
+  section { padding: 72px 0; border-bottom: 1px solid var(--trait); }
+  section:nth-of-type(even) { background: var(--fond-2); }
+  .duo { display: grid; grid-template-columns: 1fr 1fr; gap: 44px; align-items: center; }
+  .duo.inverse > :first-child { order: 2; }
+  h2 { font-size: clamp(26px, 3.2vw, 36px); line-height: 1.15; margin: 0 0 14px; letter-spacing: -.01em; }
+  .chapeau { color: var(--texte-2); font-size: 18px; margin: 0 0 18px; }
+  ul.points { margin: 0; padding-left: 1.1em; }
+  ul.points li { margin: 6px 0; }
+  ul.points li::marker { color: var(--accent); }
+  .cartes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-top: 28px; }
+  .carte { background: var(--carte); border: 1px solid var(--trait); border-radius: 14px; padding: 20px 22px; }
+  .carte h3 { margin: 0 0 8px; font-size: 18px; }
+  .carte p { margin: 0; color: var(--texte-2); font-size: 16px; }
+  .carte svg { display: block; width: 100%; height: auto; margin-bottom: 14px; }
+
+  /* ---- menu de la tablette, reproduit en HTML */
+  .menu {
+    max-width: 340px; margin: 0 auto; padding: 18px;
+    background: rgba(8, 11, 16, .78); border: 1px solid var(--trait); border-radius: 18px;
+    backdrop-filter: blur(6px);
+  }
+  .menu-fond { padding: 28px; border-radius: 16px; background: linear-gradient(135deg, #155e75, #312e81 60%, #0f172a); }
+  .menu h3 { margin: 12px 0 6px; font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: var(--texte-2); }
+  .menu h3:first-child { margin-top: 0; }
+  .choix { display: flex; flex-wrap: wrap; gap: 6px; }
+  .choix span { flex: 1 1 auto; text-align: center; padding: 6px 10px; border-radius: 9px; background: var(--carte); font-size: 14px; }
+  .choix span.actif { background: var(--accent); color: #04232a; font-weight: 650; }
+
+  table { width: 100%; border-collapse: collapse; margin-top: 18px; font-size: 16px; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--trait); vertical-align: top; }
+  th { color: var(--texte-2); font-weight: 600; }
+  td:first-child { white-space: nowrap; }
+  code { font: 15px ui-monospace, Consolas, monospace; }
+
+  ol.etapes { margin: 18px 0 0; padding-left: 1.3em; }
+  ol.etapes li { margin: 8px 0; }
+  ol.etapes li::marker { color: var(--accent); font-weight: 700; }
+
+  .note {
+    border-left: 3px solid var(--accent); background: var(--carte);
+    padding: 14px 18px; border-radius: 0 10px 10px 0; color: var(--texte-2); margin-top: 22px;
+  }
+
+  footer { padding: 40px 0 60px; color: var(--texte-2); font-size: 15px; }
+
+  @media (max-width: 860px) {
+    .duo, .cartes { grid-template-columns: 1fr; }
+    .duo.inverse > :first-child { order: 0; }
+    section { padding: 52px 0; }
+    td:first-child { white-space: normal; }
+    code { overflow-wrap: anywhere; }
+  }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="page">
+    <div class="marque">36Screenlink</div>
+    <h1>Votre tablette Android devient un vrai écran de Windows</h1>
+    <p class="accroche">Branchez-la en USB ou restez en Wi-Fi : Windows la voit comme un moniteur de plus.
+      Glissez-y vos fenêtres, touchez, écrivez au clavier ou au stylet, écoutez le son.
+      Aucun compte, aucun serveur : tout passe directement entre vos deux appareils, chiffré.</p>
+    <div class="boutons">
+      <a class="bouton plein" href="https://github.com/36txXnxTrGXgSH/36Screenlink/releases/latest">Télécharger</a>
+      <a class="bouton contour" href="https://github.com/36txXnxTrGXgSH/36Screenlink">Voir le dépôt</a>
+    </div>
+    <ul class="pastilles">
+      <li>USB et Wi-Fi</li>
+      <li>Jusqu'à 120 Hz</li>
+      <li>Tactile, clavier, stylet</li>
+      <li>Son sur le PC ou la tablette</li>
+      <li>GPU NVIDIA, AMD ou Intel</li>
+      <li>Version portable</li>
+      <li>Sans compte</li>
+      <li>En français</li>
+    </ul>
+    <img class="ecran" src="images/01-accueil.png" width="1600" height="900"
+         alt="Illustration : un moniteur de PC relié en USB ou en Wi-Fi à une tablette qui prolonge le bureau Windows, avec un menu vertical à gauche">
+  </div>
+</header>
+
+<main>
+
+<section id="moniteur">
+  <div class="page">
+    <h2>Un vrai moniteur, pas une fenêtre de partage</h2>
+    <p class="chapeau">36Screenlink installe un pilote d'écran : la tablette apparaît dans les paramètres d'affichage de Windows, comme un écran branché.</p>
+    <div class="cartes">
+      <div class="carte"><h3>Résolution native</h3><p>Le mode le plus proche de l'appareil est choisi tout seul, jusqu'à 120 Hz.</p></div>
+      <div class="carte"><h3>Faible latence</h3><p>Environ 30 à 45 ms, mesurés en USB et en Wi-Fi sur la tablette de référence, grâce à l'encodage vidéo matériel du GPU.</p></div>
+      <div class="carte"><h3>Rotation suivie</h3><p>Tournez l'appareil : l'écran Windows passe en portrait ou en paysage. Vous pouvez aussi verrouiller la rotation.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="modes">
+  <div class="page">
+    <h2>Trois façons d'utiliser l'écran</h2>
+    <p class="chapeau">Changez de mode à tout moment, depuis le menu de la tablette.</p>
+    <div class="cartes">
+      <div class="carte">
+        <svg viewBox="0 0 240 110" role="img" aria-label="Le bureau continue du moniteur vers la tablette"><rect x="6" y="14" width="130" height="82" rx="6" fill="#155e75"/><rect x="150" y="26" width="84" height="58" rx="6" fill="#312e81"/><path d="M116 55h46m-9-8 9 8-9 8" fill="none" stroke="#22d3ee" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <h3>Étendu</h3><p>La tablette prolonge le bureau : vos fenêtres passent d'un écran à l'autre.</p>
+      </div>
+      <div class="carte">
+        <svg viewBox="0 0 240 110" role="img" aria-label="Le moniteur et la tablette montrent la même image"><rect x="6" y="14" width="130" height="82" rx="6" fill="#155e75"/><rect x="150" y="26" width="84" height="58" rx="6" fill="#155e75"/><circle cx="71" cy="55" r="16" fill="#22d3ee"/><circle cx="192" cy="55" r="12" fill="#22d3ee"/></svg>
+        <h3>Dupliquer</h3><p>La tablette montre l'écran principal du PC. Pratique pour présenter.</p>
+      </div>
+      <div class="carte">
+        <svg viewBox="0 0 240 110" role="img" aria-label="Le moniteur est éteint, seule la tablette affiche"><rect x="6" y="14" width="130" height="82" rx="6" fill="#0b0f15" stroke="#2a3340"/><rect x="150" y="26" width="84" height="58" rx="6" fill="#155e75"/><circle cx="192" cy="55" r="12" fill="#22d3ee"/></svg>
+        <h3>Tablette seule</h3><p>L'écran du PC s'éteint. Il revient tout seul environ 15 s après une déconnexion.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="menu">
+  <div class="page duo">
+    <div class="menu-fond">
+      <div class="menu" role="img" aria-label="Reproduction du menu latéral de la tablette">
+        <h3>Sortie son</h3><div class="choix"><span>PC</span><span class="actif">Tablette</span></div>
+        <h3>Affichage</h3><div class="choix"><span class="actif">Étendu</span><span>Dupliquer</span><span>Tablette seule</span></div>
+        <h3>Fréquence</h3><div class="choix"><span>60 Hz</span><span class="actif">120 Hz</span></div>
+        <h3>Raccourcis</h3><div class="choix"><span>Clavier</span><span>Touche Windows</span><span>Afficher le bureau</span></div>
+      </div>
+    </div>
+    <div>
+      <h2>Tout sous le pouce</h2>
+      <p class="chapeau">Glissez depuis le bord gauche vers le centre : un menu transparent s'ouvre sans quitter l'écran. Touchez à côté pour le refermer.</p>
+      <ul class="points">
+        <li><strong>Sortie son</strong>, PC ou tablette.</li>
+        <li><strong>Clavier</strong> à l'écran. Un clavier branché à l'appareil fonctionne aussi.</li>
+        <li><strong>Mode d'affichage</strong> et <strong>fréquence</strong>, 60 ou 120 Hz.</li>
+        <li><strong>Rotation</strong> automatique ou verrouillée.</li>
+        <li><strong>Tactile</strong> à couper pour dessiner au stylet sans que la paume clique.</li>
+        <li><strong>Touche Windows</strong>, <strong>Afficher le bureau</strong> et <strong>Déconnecter</strong>.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section id="saisie">
+  <div class="page">
+    <h2>Touchez, tapez, dessinez</h2>
+    <p class="chapeau">La tablette ne fait pas qu'afficher : elle pilote Windows.</p>
+    <div class="cartes">
+      <div class="carte"><h3>Tactile</h3><p>Plusieurs doigts, transmis comme un vrai écran tactile : vous touchez, faites défiler et glissez vos fenêtres.</p></div>
+      <div class="carte"><h3>Stylet</h3><p>Un vrai stylet pour Windows : pression et inclinaison arrivent aux logiciels de dessin.</p></div>
+      <div class="carte"><h3>Clavier</h3><p>Clavier à l'écran ou clavier physique branché à l'appareil, avec les accents.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="fenetres">
+  <div class="page duo inverse">
+    <svg viewBox="0 0 520 300" role="img" aria-label="Une fenêtre quitte le moniteur pour la tablette après une touche sur sa barre des tâches" style="width:100%;height:auto">
+      <rect x="10" y="30" width="300" height="200" rx="10" fill="#141922" stroke="#2a3340" stroke-width="2"/>
+      <rect x="40" y="62" width="150" height="104" rx="7" fill="none" stroke="#a7b3c2" stroke-width="2" stroke-dasharray="6 6"/>
+      <rect x="350" y="20" width="160" height="260" rx="14" fill="#141922" stroke="#2a3340" stroke-width="2"/>
+      <rect x="362" y="80" width="136" height="104" rx="7" fill="#22d3ee"/>
+      <rect x="362" y="80" width="136" height="20" rx="7" fill="#0e7490"/>
+      <rect x="350" y="250" width="160" height="30" rx="0" fill="#0b0f15"/>
+      <rect x="418" y="255" width="20" height="20" rx="4" fill="#22d3ee"/>
+      <circle cx="428" cy="265" r="17" fill="#fff" opacity=".25"/>
+      <path d="M198 112 C 250 112 300 120 352 130" fill="none" stroke="#22d3ee" stroke-width="4" stroke-linecap="round"/>
+      <path d="M338 120l14 10-16 7" fill="none" stroke="#22d3ee" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    <div>
+      <h2>Vos fenêtres viennent à vous</h2>
+      <p class="chapeau">En mode Étendu, touchez une fenêtre dans la barre des tâches de la tablette : elle s'y affiche, même si elle était sur l'écran principal.</p>
+      <ul class="points">
+        <li>Une fenêtre agrandie reste agrandie.</li>
+        <li>Une fenêtre déjà active ne se réduit pas : elle arrive sur la tablette.</li>
+        <li>Une fenêtre glissée vers le PC y reste.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section id="session">
+  <div class="page duo">
+    <div>
+      <h2>Toujours prêt, facile à arrêter</h2>
+      <ul class="points">
+        <li><strong>Démarrage avec Windows :</strong> ouvrez l'application sur la tablette, l'écran apparaît.</li>
+        <li><strong>Quitter :</strong> clic droit sur l'icône près de l'horloge. L'icône du menu Démarrer relance l'application.</li>
+        <li><strong>Passage automatique en Wi-Fi</strong> quand vous débranchez le câble.</li>
+        <li><strong>Déconnexion propre :</strong> le moniteur disparaît après 10 s, et Windows récupère les fenêtres.</li>
+      </ul>
+    </div>
+    <div class="carte">
+      <h3>Option : écran de verrouillage et UAC</h3>
+      <p>À l'installation, une option décochée par défaut permet d'atteindre l'écran de verrouillage et de valider les invites UAC depuis la tablette. Toute personne qui tient l'appareil, application ouverte, peut alors agir sur le PC : protégez-le par un code.</p>
+    </div>
+  </div>
+</section>
+
+<section id="securite">
+  <div class="page">
+    <h2>Vos écrans restent entre vos appareils</h2>
+    <div class="cartes">
+      <div class="carte"><h3>Aucun serveur</h3><p>Pas de compte, pas de statistiques. Le PC et la tablette se parlent directement.</p></div>
+      <div class="carte"><h3>Flux chiffré</h3><p>Image, son et saisie sont chiffrés en AES-256-GCM, avec authentification mutuelle.</p></div>
+      <div class="carte"><h3>Appairage par code</h3><p>Un code à 6 chiffres à comparer sur les deux écrans. La clé naît d'un échange ECDH et n'est jamais transmise.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="telecharger">
+  <div class="page">
+    <h2>Installer en trois étapes</h2>
+    <ol class="etapes">
+      <li>Sur le PC, téléchargez et lancez <code>36Screenlink-Setup.exe</code>.</li>
+      <li>Sur l'appareil Android, installez <code>36Screenlink.apk</code>, puis ouvrez l'application.</li>
+      <li>Comparez le code à 6 chiffres sur les deux écrans. S'il est identique, confirmez des deux côtés.</li>
+    </ol>
+    <p class="chapeau" style="margin-top:28px">Dans la page <a href="https://github.com/36txXnxTrGXgSH/36Screenlink/releases/latest">Releases</a> :</p>
+    <table>
+      <tr><th>Fichier</th><th>Pour qui</th></tr>
+      <tr><td><code>36Screenlink-Setup.exe</code></td><td>Usage normal : démarre avec Windows, sans invite UAC.</td></tr>
+      <tr><td><code>36Screenlink-Portable.zip</code></td><td>Sans installation, depuis un dossier ou une clé USB. Une invite administrateur s'affiche à chaque lancement, et les fenêtres administrateur, le verrouillage et l'UAC restent hors de portée.</td></tr>
+      <tr><td><code>36Screenlink.apk</code></td><td>À installer sur l'appareil Android, dans les deux cas.</td></tr>
+    </table>
+    <h3 style="margin-top:36px">Configuration requise</h3>
+    <table>
+      <tr><td>PC</td><td>Windows 10 22H2 ou Windows 11, 64 bits</td></tr>
+      <tr><td>GPU</td><td>NVIDIA, AMD ou Intel, dédié ou intégré au processeur, avec encodage vidéo matériel HEVC ou H.264 et pilote à jour</td></tr>
+      <tr><td>Appareil</td><td>Android 11 ou plus récent</td></tr>
+      <tr><td>Wi-Fi</td><td>PC et appareil sur le même réseau</td></tr>
+      <tr><td>USB</td><td>Débogage USB actif sur l'appareil, et option USB cochée à l'installation</td></tr>
+    </table>
+    <div class="note">
+      <strong>À savoir.</strong> 36Screenlink n'a été testé qu'avec une RTX 3080 et une Lenovo Idea Tab Pro.
+      Les GPU AMD et Intel n'ont pas encore été essayés sur du vrai matériel, et le stylet n'a pas été essayé avec un vrai stylet.
+      Windows peut refuser le pilote sur certains PC, notamment avec Smart App Control.
+      Les fichiers ne sont pas signés : si Windows affiche « Windows a protégé votre ordinateur », cliquez sur
+      <em>Informations complémentaires</em>, puis <em>Exécuter quand même</em>.
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="page">
+    36Screenlink — écran étendu Android pour Windows, en français, réalisé avec Claude, l'IA d'Anthropic.
+    Logiciel propriétaire, voir <a href="https://github.com/36txXnxTrGXgSH/36Screenlink/blob/main/LICENSE">la licence</a>.
+    Les images de cette page sont des illustrations.
+    · <a href="https://36txxnxtrgxgsh.github.io/Portfolio-Github/">Mes autres projets</a>
+  </div>
+</footer>
+
+</body>
+</html>
