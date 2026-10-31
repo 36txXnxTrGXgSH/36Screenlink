@@ -58,18 +58,21 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
             AppendMenuW(menu, MF_STRING | (onTablet ? 0 : MF_CHECKED), kCmdAudioPc, L"Son sur le PC");
             AppendMenuW(menu, MF_STRING | (onTablet ? MF_CHECKED : 0), kCmdAudioTablet, L"Son sur la tablette");
+            AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
             if (!gConfig.managedByService) {
-                AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
                 AppendMenuW(menu, MF_STRING, kCmdLog, L"Ouvrir le journal");
                 if (!gConfig.portableDirectory.empty()) AppendMenuW(menu, MF_STRING, kCmdRemoveDriver, L"Retirer le pilote et quitter");
-                AppendMenuW(menu, MF_STRING, kCmdQuit, L"Quitter");
             }
+            AppendMenuW(menu, MF_STRING, kCmdQuit, L"Quitter");
             POINT p;
             GetCursorPos(&p);
             SetForegroundWindow(hwnd);
             const UINT cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_NONOTIFY, p.x, p.y, 0, hwnd, nullptr);
             DestroyMenu(menu);
-            if (cmd == kCmdQuit) DestroyWindow(hwnd);
+            if (cmd == kCmdQuit) {
+                gConfig.onUserQuit();
+                DestroyWindow(hwnd);
+            }
             if (cmd == kCmdLog) ShellExecuteW(nullptr, L"open", gConfig.logPath.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
             if (cmd == kCmdRemoveDriver) removeDriverAndQuit(hwnd);
             if (cmd == kCmdAudioPc) gConfig.setAudioOnTablet(false);

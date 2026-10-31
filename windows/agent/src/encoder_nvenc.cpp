@@ -22,7 +22,7 @@ NvencEncoder::~NvencEncoder() {
     if (lib_) FreeLibrary(lib_);
 }
 
-bool NvencEncoder::open(ID3D11Device* device, ID3D11Texture2D* input, const EncoderConfig& cfg) {
+bool NvencEncoder::open(ID3D11Device* device, ID3D11Texture2D* input, EncoderConfig& cfg) {
     cfg_ = cfg;
     // System32 uniquement : une DLL du même nom déposée à côté de l'exe serait sinon chargée.
     lib_ = LoadLibraryExW(L"nvEncodeAPI64.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);

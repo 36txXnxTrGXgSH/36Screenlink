@@ -12,6 +12,8 @@ namespace {
 constexpr wchar_t kServiceName[] = L"36Screenlink";
 constexpr DWORD kPollMs = 2000;
 constexpr DWORD kNoSession = 0xFFFFFFFF;
+// « Quitter » : le service s'arrête lui aussi. L'icône du menu Démarrer le relance.
+constexpr DWORD kUserQuitCode = 36;
 
 SERVICE_STATUS_HANDLE gStatusHandle = nullptr;
 SERVICE_STATUS gStatus{};
@@ -87,6 +89,11 @@ void WINAPI serviceMain(DWORD, LPWSTR*) {
     DWORD agentSession = kNoSession;
     while (WaitForSingleObject(gStopEvent, kPollMs) == WAIT_TIMEOUT) {
         const DWORD session = WTSGetActiveConsoleSessionId();
+        if (agent && WaitForSingleObject(agent, 0) == WAIT_OBJECT_0) {
+            DWORD exitCode = 0;
+            GetExitCodeProcess(agent, &exitCode);
+            if (exitCode == kUserQuitCode) break;
+        }
         if (agent && (session != agentSession || WaitForSingleObject(agent, 0) == WAIT_OBJECT_0)) stopAgent(agent);
         if (!agent && session != kNoSession) {
             agent = startAgent(session);

@@ -5,11 +5,12 @@
 struct TrayConfig {
     std::function<std::wstring()> status;
     std::function<void()> onQuit;
+    std::function<void()> onUserQuit;
     std::function<bool()> audioOnTablet;
     std::function<void(bool)> setAudioOnTablet;
     std::wstring logPath;
-    // Lancé par le service sous SYSTEM : ni « Quitter », que le service annulerait, ni
-    // ouverture du journal, qui lancerait un éditeur avec les droits SYSTEM.
+    // Lancé par le service sous SYSTEM : pas d'ouverture du journal, qui lancerait un
+    // éditeur avec les droits SYSTEM.
     bool managedByService = false;
     // Version portable uniquement : dossier du script qui retire le pilote du PC.
     std::wstring portableDirectory;

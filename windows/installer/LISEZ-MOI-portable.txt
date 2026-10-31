@@ -20,4 +20,5 @@ Platform Tools dans ce dossier, et activez le debogage USB sur la tablette.
 N'utilisez pas cette version sur un PC ou 36Screenlink est deja installe.
 Sans droits administrateur, l'ecran etendu est impossible.
 
-GPU NVIDIA obligatoire. Les donnees restent dans le sous-dossier data.
+GPU NVIDIA, AMD ou Intel avec encodage video materiel. Les donnees restent
+dans le sous-dossier data.

@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -19,6 +20,7 @@
 #include "channel.h"
 #include "desktop.h"
 #include "discovery.h"
+#include "encoder_mf.h"
 #include "encoder_nvenc.h"
 #include "input.h"
 #include "monitor.h"
@@ -46,6 +48,7 @@ struct Options {
     bool injectTouch = true;
     bool tray = false;
     bool virtualMonitor = true;
+    bool forceMediaFoundation = false; // test : encodeur générique, même sur NVIDIA
     bool simulateCongestion = false; // test : force le signal de saturation de 5 à 10 s
     int durationSec = 0;
     bool listOnly = false;
@@ -58,6 +61,7 @@ std::atomic<bool> gAudioOnTablet{false};
 std::atomic<uint8_t> gDisplayMode{proto::kDisplayExtended};
 std::atomic<uint32_t> gFps{120};
 std::atomic<bool> gRestartSession{false};
+bool gUserQuit = false;
 std::mutex gStatusMutex;
 std::wstring gStatus = L"Démarrage";
 VirtualMonitor gMonitor;
@@ -265,24 +269,22 @@ ComPtr<ID3D11Texture2D> makeTexture(ID3D11Device* device, UINT w, UINT h, D3D11_
     return tex;
 }
 
-// Encodeur sur le GPU NVIDIA, qui peut différer de l'adaptateur de l'écran capturé (cas d'un IDD).
-struct EncodeDevice {
-    ComPtr<ID3D11Device> device;
-    ComPtr<ID3D11DeviceContext> context;
-    bool create() {
-        ComPtr<IDXGIFactory1> factory;
-        CreateDXGIFactory1(IID_PPV_ARGS(&factory));
-        ComPtr<IDXGIAdapter1> adapter;
-        for (UINT i = 0; factory->EnumAdapters1(i, adapter.ReleaseAndGetAddressOf()) != DXGI_ERROR_NOT_FOUND; ++i) {
-            DXGI_ADAPTER_DESC1 d{};
-            adapter->GetDesc1(&d);
-            if (d.VendorId != 0x10DE) continue;
-            return SUCCEEDED(D3D11CreateDevice(adapter.Get(), D3D_DRIVER_TYPE_UNKNOWN, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION,
-                                               device.GetAddressOf(), nullptr, context.GetAddressOf()));
+// NVENC sur NVIDIA, sinon encodeur matériel du GPU par Media Foundation (AMD, Intel, ou repli
+// NVIDIA). Toujours sur le GPU de l'écran capturé, ce qui évite toute copie entre GPU.
+std::unique_ptr<Encoder> openEncoder(const Options& opt, UINT vendorId, ID3D11Device* device, ID3D11Texture2D* input, EncoderConfig& cfg) {
+    if (vendorId == 0x10DE && !opt.forceMediaFoundation) {
+        auto nvenc = std::make_unique<NvencEncoder>();
+        if (nvenc->open(device, input, cfg)) {
+            std::printf("Encodeur matériel : NVENC\n");
+            return nvenc;
         }
-        return false;
+        std::printf("NVENC : %s\n", nvenc->lastError().c_str());
     }
-};
+    auto generic = std::make_unique<MediaFoundationEncoder>();
+    if (generic->open(device, input, cfg)) return generic;
+    std::printf("Media Foundation : %s\n", generic->lastError().c_str());
+    return nullptr;
+}
 
 struct SessionStats {
     std::atomic<uint32_t> tabletFrames{0}, tabletAvgLat{0}, tabletP95Lat{0}, tabletAvgDec{0}, tabletDrops{0};
@@ -483,26 +485,8 @@ bool runSession(const Options& opt, const std::string& host) {
     }
     std::printf("Capture : %ux%u, rotation %u\n", cap.width(), cap.height(), cap.rotationDegrees());
 
-    EncodeDevice enc;
-    if (!enc.create()) {
-        std::printf("GPU NVIDIA introuvable.\n");
-        trayAlert(L"GPU NVIDIA introuvable : encodage impossible.");
-        return false;
-    }
-    const bool sameGpu = output->vendorId == 0x10DE;
     const UINT width = cap.width() & ~1u, height = cap.height() & ~1u;
-
-    // Sur le même GPU, tout reste en mémoire vidéo. Sinon, passage par une copie CPU.
-    ComPtr<ID3D11Texture2D> capTarget, encInput, staging;
-    if (sameGpu) {
-        // Les périphériques D3D sont distincts : l'encodage réutilise celui de la capture.
-        encInput = makeTexture(cap.device(), width, height, D3D11_USAGE_DEFAULT, D3D11_BIND_RENDER_TARGET, 0);
-        capTarget = encInput;
-    } else {
-        staging = makeTexture(cap.device(), width, height, D3D11_USAGE_STAGING, 0, D3D11_CPU_ACCESS_READ);
-        capTarget = staging;
-        encInput = makeTexture(enc.device.Get(), width, height, D3D11_USAGE_DEFAULT, D3D11_BIND_RENDER_TARGET, 0);
-    }
+    ComPtr<ID3D11Texture2D> capTarget = makeTexture(cap.device(), width, height, D3D11_USAGE_DEFAULT, D3D11_BIND_RENDER_TARGET, 0);
 
     EncoderConfig cfg;
     cfg.width = width;
@@ -511,10 +495,9 @@ bool runSession(const Options& opt, const std::string& host) {
     cfg.bitrate = opt.bitrateMbps * 1'000'000;
     cfg.hevc = opt.hevc && (codecs & 2);
 
-    NvencEncoder encoder;
-    if (!encoder.open(sameGpu ? cap.device() : enc.device.Get(), encInput.Get(), cfg)) {
-        std::printf("NVENC : %s\n", encoder.lastError().c_str());
-        trayAlert(L"Encodeur NVENC indisponible, voir le journal.");
+    const auto encoder = openEncoder(opt, output->vendorId, cap.device(), capTarget.Get(), cfg);
+    if (!encoder) {
+        trayAlert(L"Aucun encodeur vidéo matériel disponible sur ce GPU. Mettez à jour son pilote.");
         return false;
     }
 
@@ -524,8 +507,9 @@ bool runSession(const Options& opt, const std::string& host) {
         .u16(static_cast<uint16_t>(cfg.fps)).u32(cfg.bitrate).u16(static_cast<uint16_t>(cap.rotationDegrees()));
     if (!ch.send(config.data())) return true;
 
-    const auto headers = encoder.sequenceHeaders();
-    {
+    const auto headers = encoder->sequenceHeaders();
+    // Certains encodeurs placent ces en-têtes uniquement dans le flux.
+    if (!headers.empty()) {
         proto::Writer w(proto::kVideo);
         w.u8(proto::kFlagConfig).u64(nowUs()).bytes(headers.data(), headers.size());
         if (!ch.send(w.data())) return true;
@@ -648,13 +632,7 @@ bool runSession(const Options& opt, const std::string& host) {
             pending = true;
             pendingPts = qpcToUs(frame.presentQpc);
             refinements = 3;
-            if (!sameGpu) {
-                D3D11_MAPPED_SUBRESOURCE mapped{};
-                if (SUCCEEDED(cap.context()->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped))) {
-                    enc.context->UpdateSubresource(encInput.Get(), 0, nullptr, mapped.pData, mapped.RowPitch, 0);
-                    cap.context()->Unmap(staging.Get(), 0);
-                }
-            }
+
         }
 
         const uint64_t now = nowUs();
@@ -673,7 +651,7 @@ bool runSession(const Options& opt, const std::string& host) {
             nextEncodeUs = std::max(nextEncodeUs + intervalUs, now - intervalUs);
             const uint64_t before = nowUs();
             size_t frameBytes = 0;
-            const bool ok = encoder.encode(pts, idr, [&](const uint8_t* data, size_t n, bool key) {
+            const bool ok = encoder->encode(pts, idr, [&](const uint8_t* data, size_t n, bool key) {
                 frameBytes = n;
                 proto::Writer w(proto::kVideo);
                 w.u8(key ? proto::kFlagKey : 0).u64(pts).bytes(data, n);
@@ -683,7 +661,7 @@ bool runSession(const Options& opt, const std::string& host) {
                 return sent;
             });
             if (!ok) {
-                std::printf("Encodage : %s\n", encoder.lastError().c_str());
+                std::printf("Encodage : %s\n", encoder->lastError().c_str());
                 break;
             }
             const uint64_t spent = nowUs() - before;
@@ -724,7 +702,7 @@ bool runSession(const Options& opt, const std::string& host) {
                 nextBitrate = std::min(cfg.bitrate, currentBitrate / 4 * 5);
                 calmSeconds = 0;
             }
-            if (nextBitrate != currentBitrate && encoder.setBitrate(nextBitrate)) {
+            if (nextBitrate != currentBitrate && encoder->setBitrate(nextBitrate)) {
                 std::printf("Débit : %u -> %u Mb/s (socket %.1f ms, p95 %.1f ms)\n", currentBitrate / 1'000'000, nextBitrate / 1'000'000,
                             sendMs, stats.tabletP95Lat / 1000.0);
                 std::fflush(stdout);
@@ -829,6 +807,7 @@ Options parseArgs(int argc, wchar_t** argv) {
         else if (a == L"--list") o.listOnly = true;
         else if (a == L"--stop") o.stopOthers = true;
         else if (a == L"--open") o.open = true;
+        else if (a == L"--encoder") o.forceMediaFoundation = next() == L"mf";
     }
     return o;
 }
@@ -940,6 +919,7 @@ int wmain(int argc, wchar_t** argv) {
         TrayConfig tray;
         tray.status = [] { std::lock_guard lock(gStatusMutex); return gStatus; };
         tray.onQuit = [] { gStop = true; };
+        tray.onUserQuit = [] { gUserQuit = true; };
         tray.audioOnTablet = [] { return gAudioOnTablet.load(); };
         tray.setAudioOnTablet = [](bool onTablet) { gAudioOnTablet = onTablet; saveAudioOnTablet(onTablet); };
         tray.logPath = logPath;
@@ -955,5 +935,6 @@ int wmain(int argc, wchar_t** argv) {
     SetEvent(quitEvent);
     quitWatcher.join();
     WSACleanup();
-    return 0;
+    // Le service reconnaît ce code et ne relance pas l'agent : voir kUserQuitCode côté service.
+    return gUserQuit && opt.system ? 36 : 0;
 }
