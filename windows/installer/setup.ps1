@@ -36,8 +36,17 @@ try {
         Remove-Item $unpacked -Recurse -Force
     }
 
-    New-Item -Path 'HKLM:\SOFTWARE\36Screenlink' -Force | Out-Null
-    Set-ItemProperty 'HKLM:\SOFTWARE\36Screenlink' SecureScreens ([int][bool]$SecureScreens) -Type DWord
+    # Réglage absent = option désactivée : une erreur ici ne doit pas empêcher l'installation,
+    # sauf si l'utilisateur a demandé l'option.
+    try {
+        $key = [Microsoft.Win32.Registry]::LocalMachine.CreateSubKey('SOFTWARE\36Screenlink')
+        $key.SetValue('SecureScreens', [int][bool]$SecureScreens, [Microsoft.Win32.RegistryValueKind]::DWord)
+        $key.Close()
+    }
+    catch {
+        if ($SecureScreens) { throw }
+        Write-Output "Réglage SecureScreens non écrit : $_"
+    }
 
     if (-not (Get-Service $serviceName -ErrorAction SilentlyContinue)) {
         New-Service -Name $serviceName -DisplayName '36Screenlink' -StartupType Automatic `
