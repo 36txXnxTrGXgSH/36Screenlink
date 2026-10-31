@@ -1,5 +1,17 @@
 # Résultats de tests — 2026-10-31
 
+## Version portable et désinstallation 1.3.0
+
+| Vérification | Résultat |
+|---|---|
+| Désinstallation : service, fichiers, données, raccourci | OK |
+| Portable depuis un dossier, UAC, installation du pilote | OK |
+| Appairage et flux en Wi-Fi sans adb | OK |
+| Moniteur virtuel reconnu par son identité | OK sur un PC à un écran |
+| Retirer le pilote et quitter : pilote, certificats, processus | OK, rien ne reste |
+| Réinstallation après retrait | OK, après correction du réglage de registre |
+| PC à deux écrans physiques | **Non testé** |
+| Option UAC et déverrouillage cochée à l'installation | Installée ; validation par la tablette **non retestée** |
 ## Menu latéral et modes d'affichage 1.2.0
 
 Test sur la tablette de référence, gestes simulés par adb, sur le service installé.

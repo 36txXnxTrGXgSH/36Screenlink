@@ -53,6 +53,19 @@ Sur la tablette, **glissez depuis le bord gauche vers le centre** pour ouvrir le
 - **Déconnexion :** le moniteur disparaît après 10 s, et Windows récupère les fenêtres.
 - **Nouveau PC :** dans l'application, touchez *Nouvel appairage*, puis lancez 36Screenlink sur le PC.
 
+## Version portable
+
+`36Screenlink-Portable.zip` se décompresse dans un dossier ou sur une clé USB, sans installation : lancez `36Screenlink.exe` et acceptez l'invite administrateur.
+
+| | Installateur | Portable |
+|---|---|---|
+| Démarrage avec Windows | Oui | Non |
+| Invite administrateur | À l'installation | À chaque lancement |
+| Fenêtres administrateur, verrouillage, UAC | Oui ou en option | Non |
+| Traces sur le PC | Retirées à la désinstallation | Pilote, retiré par *Retirer le pilote et quitter* |
+
+Sans droits administrateur, l'écran étendu est impossible. N'utilisez pas le portable sur un PC où 36Screenlink est installé.
+
 ## Options de l'installateur
 
 **Prise en charge USB :** télécharge Android Platform Tools chez Google. L'appareil doit avoir le débogage USB actif.
@@ -70,7 +83,7 @@ Paramètres Windows > Applications > 36Screenlink > Désinstaller. Le pilote, le
 Prérequis : Visual Studio 2022 ou Build Tools avec C++, Windows SDK 10.0.26100, Android SDK, JDK 17 et Inno Setup 6. Une APK finale exige un `android/keystore.properties` à vous, jamais versionné, avec `storeFile`, `storePassword`, `keyAlias` et `keyPassword`.
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File windows/build-release.ps1 -Version 1.2.0
+powershell -ExecutionPolicy Bypass -File windows/build-release.ps1 -Version 1.3.0
 ```
 
 Le résultat se trouve dans `dist/release`.
