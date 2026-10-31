@@ -1,5 +1,19 @@
 # Résultats de tests — 2026-10-31
 
+## Menu latéral et modes d'affichage 1.2.0
+
+Test sur la tablette de référence, gestes simulés par adb, sur le service installé.
+
+| Vérification | Résultat |
+|---|---|
+| Ouverture par glissement depuis le bord gauche | OK |
+| Fréquence 60 puis 120 Hz | OK, session relancée au bon mode |
+| Rotation verrouillée, tactile coupé | OK, états affichés |
+| Dupliquer, retour Étendu | OK, moniteur retiré puis recréé |
+| Tablette seule, retour par le menu | OK, écran du PC rétabli |
+| Déconnexion en Tablette seule | OK, écran du PC revenu en 15 s, reconnexion normale |
+| Touche Windows, Afficher le bureau, Déconnecter | **Non testés** |
+| Clic sur l'icône du menu Démarrer | **Non testé** : raccourci présent |
 ## Installateur 1.1.0
 
 Test de bout en bout sur le PC de référence, tablette réinstallée à zéro, avec `36Screenlink-Setup.exe`.

@@ -1,4 +1,4 @@
-# Protocole v3
+# Protocole v4
 
 Implémentation : `windows/agent/src/protocol.h`, `channel.cpp` côté PC, `Protocol.kt`, `StreamServer.kt`, `Crypto.kt` côté tablette.
 
@@ -67,6 +67,8 @@ Nonce de 12 octets : 4 octets nuls, puis compteur 64 bits propre à chaque sens.
 | 11 | CLOCK | PC→T | i64 décalage (tablette − PC) en µs |
 | 12 | KEY | T→PC | u8 appui, u16 code (scancode set 1, 0x100 = préfixe E0) |
 | 13 | TEXT | T→PC | Texte UTF-8 du clavier à l'écran |
+| 18 | CONTROL | T→PC | u8 réglage (1 affichage, 2 fréquence), u8 valeur |
+| 19 | CONTROL_STATE | PC→T | u8 mode d'affichage (0 étendu, 1 dupliqué, 2 tablette seule), u8 fréquence |
 | 15 | AUDIO | PC→T | u32 fréquence, PCM stéréo 16 bits little-endian |
 | 16 | AUDIO_ROUTE | T→PC | u8 sortie demandée (0 PC, 1 tablette) |
 | 17 | AUDIO_STATE | PC→T | u8 sortie active (0 PC, 1 tablette) |

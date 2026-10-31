@@ -31,8 +31,23 @@ Testé uniquement avec une RTX 3080 et une Lenovo Idea Tab Pro. Sur un autre PC,
 
 ## Utilisation
 
-- **Son :** le bouton 🔊 de l'application, ou le clic droit sur l'icône du PC, choisit entre le PC et la tablette. Sur la tablette, le son du PC est coupé.
-- **Clavier :** le bouton ⌨ ouvre le clavier à l'écran. Un clavier branché à l'appareil fonctionne aussi.
+Sur la tablette, **glissez depuis le bord gauche vers le centre** pour ouvrir le menu. Touchez à côté pour le refermer.
+
+| Réglage | Effet |
+|---|---|
+| **Sortie son** | PC ou tablette. Sur la tablette, le son du PC est coupé |
+| **Clavier** | Ouvre le clavier à l'écran. Un clavier branché à l'appareil fonctionne aussi |
+| **Étendu** | La tablette prolonge le bureau |
+| **Dupliquer** | La tablette montre l'écran principal du PC |
+| **Tablette seule** | L'écran du PC s'éteint. Il revient seul environ 15 s après une déconnexion |
+| **Fréquence** | 60 ou 120 Hz |
+| **Rotation** | Automatique ou verrouillée |
+| **Tactile** | Se coupe pour dessiner au stylet sans que la paume clique |
+| **Touche Windows, Afficher le bureau** | Raccourcis Windows |
+| **Déconnecter** | Ferme l'application et retire le moniteur |
+
+- **Menu Démarrer :** l'icône 36Screenlink relance le service si besoin. Il démarre déjà avec Windows.
+- **Son depuis le PC :** clic droit sur l'icône près de l'horloge.
 - **Rotation :** l'écran Windows suit l'appareil, avec une coupure d'environ une seconde.
 - **Résolution :** le mode le plus proche de l'appareil est choisi, jusqu'à 120 Hz. Sans mode identique, l'image a des bandes noires.
 - **Déconnexion :** le moniteur disparaît après 10 s, et Windows récupère les fenêtres.
@@ -55,7 +70,7 @@ Paramètres Windows > Applications > 36Screenlink > Désinstaller. Le pilote, le
 Prérequis : Visual Studio 2022 ou Build Tools avec C++, Windows SDK 10.0.26100, Android SDK, JDK 17 et Inno Setup 6. Une APK finale exige un `android/keystore.properties` à vous, jamais versionné, avec `storeFile`, `storePassword`, `keyAlias` et `keyPassword`.
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File windows/build-release.ps1 -Version 1.1.0
+powershell -ExecutionPolicy Bypass -File windows/build-release.ps1 -Version 1.2.0
 ```
 
 Le résultat se trouve dans `dist/release`.
