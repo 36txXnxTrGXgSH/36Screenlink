@@ -24,10 +24,10 @@ PC et appareil doivent être sur le même réseau Wi-Fi.
 | Élément | Requis |
 |---|---|
 | **PC** | Windows 10 22H2 ou Windows 11, x64 |
-| **GPU** | **NVIDIA avec NVENC**. AMD et Intel ne sont pas pris en charge |
+| **GPU** | NVIDIA, AMD ou Intel, dédié ou intégré au processeur, avec encodage vidéo matériel HEVC ou H.264 et pilote à jour |
 | **Android** | Android 11 ou plus récent |
 
-Testé uniquement avec une RTX 3080 et une Lenovo Idea Tab Pro. Sur un autre PC, Windows peut refuser le pilote, notamment avec Smart App Control.
+Testé uniquement avec une RTX 3080 et une Lenovo Idea Tab Pro. AMD et Intel passent par Media Foundation, validé sur la RTX 3080 mais **pas encore sur un vrai GPU AMD ou Intel**. Sur un autre PC, Windows peut refuser le pilote, notamment avec Smart App Control.
 
 ## Utilisation
 
@@ -47,6 +47,7 @@ Sur la tablette, **glissez depuis le bord gauche vers le centre** pour ouvrir le
 | **Déconnecter** | Ferme l'application et retire le moniteur |
 
 - **Menu Démarrer :** l'icône 36Screenlink relance le service si besoin. Il démarre déjà avec Windows.
+- **Quitter :** clic droit sur l'icône près de l'horloge, puis *Quitter*. L'application reste fermée jusqu'à l'icône du menu Démarrer ou au prochain démarrage de Windows.
 - **Son depuis le PC :** clic droit sur l'icône près de l'horloge.
 - **Rotation :** l'écran Windows suit l'appareil, avec une coupure d'environ une seconde.
 - **Résolution :** le mode le plus proche de l'appareil est choisi, jusqu'à 120 Hz. Sans mode identique, l'image a des bandes noires.
@@ -83,7 +84,7 @@ Paramètres Windows > Applications > 36Screenlink > Désinstaller. Le pilote, le
 Prérequis : Visual Studio 2022 ou Build Tools avec C++, Windows SDK 10.0.26100, Android SDK, JDK 17 et Inno Setup 6. Une APK finale exige un `android/keystore.properties` à vous, jamais versionné, avec `storeFile`, `storePassword`, `keyAlias` et `keyPassword`.
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File windows/build-release.ps1 -Version 1.3.0
+powershell -ExecutionPolicy Bypass -File windows/build-release.ps1 -Version 1.4.0
 ```
 
 Le résultat se trouve dans `dist/release`.

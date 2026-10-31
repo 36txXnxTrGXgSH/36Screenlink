@@ -1,5 +1,21 @@
 # Résultats de tests — 2026-10-31
 
+## Quitter et encodeur Media Foundation 1.4.0
+
+Test sur le PC et la tablette de référence, en USB, encodeur Media Foundation forcé par `--encoder mf`.
+
+| Vérification | Résultat |
+|---|---|
+| HEVC par Media Foundation, session complète | OK, `NVIDIA HEVC Encoder MFT` |
+| H.264 par Media Foundation, session complète | OK, `NVIDIA H.264 Encoder MFT` |
+| Animation plein écran sur l'écran virtuel, HEVC | OK, 60 à 63 images/s, encodage 12 ms, latence 35 ms, P95 44 ms |
+| Couleurs comparées à NVENC sur la même image | OK, luminosité moyenne 182,1 contre 182,0 |
+| NVENC toujours choisi sur NVIDIA | OK |
+| Icône du menu Démarrer, service arrêté | OK, service et agent relancés |
+| Clic sur Quitter, service arrêté sans relance | Arrêt constaté ; cause **non confirmée** |
+| Vrai GPU AMD, vrai GPU Intel, processeur avec partie graphique | **Non testé** : aucun matériel disponible |
+| PC portable hybride | **Non testé** |
+
 ## Version portable et désinstallation 1.3.0
 
 | Vérification | Résultat |
@@ -25,7 +41,7 @@ Test sur la tablette de référence, gestes simulés par adb, sur le service ins
 | Tablette seule, retour par le menu | OK, écran du PC rétabli |
 | Déconnexion en Tablette seule | OK, écran du PC revenu en 15 s, reconnexion normale |
 | Touche Windows, Afficher le bureau, Déconnecter | **Non testés** |
-| Clic sur l'icône du menu Démarrer | **Non testé** : raccourci présent |
+| Clic sur l'icône du menu Démarrer | Raccourci présent ; validé en 1.4.0 |
 ## Installateur 1.1.0
 
 Test de bout en bout sur le PC de référence, tablette réinstallée à zéro, avec `36Screenlink-Setup.exe`.
