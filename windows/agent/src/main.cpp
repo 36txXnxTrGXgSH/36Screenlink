@@ -741,6 +741,18 @@ int wmain(int argc, wchar_t** argv) {
         return quit ? 0 : 1;
     }
 
+    // Une seule instance sur la machine, service compris : deux agents se disputeraient la tablette.
+    SetLastError(ERROR_SUCCESS);
+    HANDLE instance = CreateMutexW(nullptr, FALSE, L"Global\\ScreenlinkAgent");
+    const DWORD instanceError = GetLastError();
+    if (instanceError == ERROR_ALREADY_EXISTS || instanceError == ERROR_ACCESS_DENIED) {
+        std::printf("36Screenlink tourne déjà.\n");
+        if (opt.tray) MessageBoxW(nullptr, L"36Screenlink tourne déjà.", L"36Screenlink", MB_ICONINFORMATION);
+        if (instance) CloseHandle(instance);
+        WSACleanup();
+        return 0;
+    }
+
     if (opt.system) {
         gSystemMode = true;
         // Lancé sans console par le service : le journal est la seule sortie.

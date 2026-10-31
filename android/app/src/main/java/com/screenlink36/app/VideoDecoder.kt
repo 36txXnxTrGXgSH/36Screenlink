@@ -114,6 +114,8 @@ class VideoDecoder(private val surface: Surface, private val onStats: (Stats) ->
     }
 
     private fun record(ptsUs: Long) {
+        // Avant la synchronisation des horloges, une latence calculée n'a aucun sens.
+        if (clockOffsetUs == 0L) return
         val now = nowUs()
         val latency = (now - clockOffsetUs - ptsUs).coerceIn(0, Int.MAX_VALUE.toLong()).toInt()
         val queued = queuedAt.remove(ptsUs)
