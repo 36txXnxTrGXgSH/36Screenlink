@@ -34,12 +34,16 @@ class StreamServer(
         fun onCursorShape(width: Int, height: Int, hotX: Int, hotY: Int, bgra: ByteArray, offset: Int)
         /** Montre le code et bloque jusqu'à la réponse de l'utilisateur. */
         fun confirmPairing(code: Int): Boolean
+        fun onAudioRoute(onTablet: Boolean)
     }
 
     private val pairing = PairingStore(File(context.noBackupFilesDir, "pairing.v2"))
     private val nsd = context.getSystemService(NsdManager::class.java)
     private val touchSender = Executors.newSingleThreadExecutor()
+    private val audio = AudioPlayer()
     @Volatile private var running = false
+    // Une tablette déjà appairée n'accepte un nouveau PC qu'à la demande de l'utilisateur.
+    @Volatile private var pairingArmed = false
     private var serverSocket: ServerSocket? = null
     private var acceptThread: Thread? = null
     @Volatile private var client: Socket? = null
@@ -82,6 +86,7 @@ class StreamServer(
                 } finally {
                     val stopStart = SystemClock.uptimeMillis()
                     decoder.stop()
+                    audio.stop()
                     Log.i(TAG, "Décodeur arrêté en ${SystemClock.uptimeMillis() - stopStart} ms")
                     tx = null
                     client = null
@@ -99,6 +104,14 @@ class StreamServer(
         runCatching { client?.close() }
         acceptThread?.join(1000)
         touchSender.shutdownNow()
+    }
+
+    fun armPairing() {
+        pairingArmed = true
+    }
+
+    fun requestAudioRoute(onTablet: Boolean) {
+        sendInput(byteArrayOf(Protocol.MSG_AUDIO_ROUTE.toByte(), if (onTablet) 1 else 0))
     }
 
     /** Coupe la session : le PC se reconnecte et relit la nouvelle orientation dans HELLO. */
@@ -129,8 +142,8 @@ class StreamServer(
 
         if (hello[5].toInt() == Protocol.MODE_PAIR) {
             val peer = ByteArray(64).also(input::readFully)
-            // Par le tunnel adb uniquement, jamais depuis le réseau.
-            if (!socket.inetAddress.isLoopbackAddress) {
+            // Possible en Wi-Fi : le code comparé des deux côtés écarte un intrus du réseau.
+            if (pairing.exists() && !pairingArmed) {
                 out.write(reply(Protocol.STATUS_PAIR_REFUSED))
                 return
             }
@@ -189,6 +202,7 @@ class StreamServer(
             return
         }
         pairing.save(psk)
+        pairingArmed = false
         out.write(reply(Protocol.STATUS_OK) + Crypto.hmac(psk, "srv".toByteArray(), transcript))
         Log.i(TAG, "Appairage enregistré")
     }
@@ -207,6 +221,15 @@ class StreamServer(
                     .putLong(SystemClock.elapsedRealtimeNanos() / 1000).array())
             }
             Protocol.MSG_CLOCK -> decoder.clockOffsetUs = b.long
+            Protocol.MSG_AUDIO -> {
+                val rate = b.int
+                audio.write(msg, b.position(), b.remaining(), rate)
+            }
+            Protocol.MSG_AUDIO_STATE -> {
+                val onTablet = b.get().toInt() != 0
+                if (!onTablet) audio.stop()
+                ui.onAudioRoute(onTablet)
+            }
             Protocol.MSG_STREAM_CONFIG -> {
                 val codec = b.get().toInt()
                 val w = b.short.toInt() and 0xFFFF

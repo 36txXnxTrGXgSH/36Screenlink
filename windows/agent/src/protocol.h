@@ -7,7 +7,7 @@
 namespace proto {
 
 inline constexpr uint16_t kPort = 7236;
-inline constexpr uint8_t kVersion = 2;
+inline constexpr uint8_t kVersion = 3;
 inline constexpr char kMagic[4] = {'S', '3', '6', 'X'};
 inline constexpr uint32_t kMaxRecord = 8 * 1024 * 1024;
 
@@ -29,6 +29,9 @@ enum Msg : uint8_t {
     kKey = 12,         // T->A u8 down, u16 code (scancode set 1, 0x100 = préfixe E0)
     kText = 13,        // T->A texte UTF-8 du clavier à l'écran
     kPen = 14,         // T->A u8 état, u16 x, u16 y, u16 pression 0..1024, i8 tiltX, i8 tiltY, u16 rotation
+    kAudio = 15,       // A->T u32 fréquence, PCM stéréo 16 bits little-endian
+    kAudioRoute = 16,  // T->A u8 sortie demandée (0 PC, 1 tablette)
+    kAudioState = 17,  // A->T u8 sortie active (0 PC, 1 tablette)
 };
 
 enum PenState : uint8_t { kPenInRange = 1, kPenContact = 2, kPenBarrel = 4, kPenEraser = 8 };

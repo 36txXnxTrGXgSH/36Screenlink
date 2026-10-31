@@ -14,3 +14,6 @@ void saveTabletAddress(const std::string& address);
 std::wstring exeDirectory();
 // Chemin du journal, dossier créé au besoin.
 std::wstring logFilePath();
+std::wstring dataFilePath(const wchar_t* name);
+bool loadAudioOnTablet();
+void saveAudioOnTablet(bool onTablet);

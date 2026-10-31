@@ -8,6 +8,7 @@ set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 add_executable(ScreenlinkAgent
     agent/src/main.cpp
+    agent/src/audio.cpp
     agent/src/capture.cpp
     agent/src/channel.cpp
     agent/src/crypto.cpp
@@ -25,7 +26,7 @@ target_include_directories(ScreenlinkAgent PRIVATE third_party/nvenc)
 target_compile_definitions(ScreenlinkAgent PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_compile_options(ScreenlinkAgent PRIVATE /W4 /permissive- /utf-8)
 target_link_libraries(ScreenlinkAgent PRIVATE
-    d3d11 dxgi ws2_32 bcrypt crypt32 dnsapi user32 shell32 shcore wtsapi32)
+    d3d11 dxgi ws2_32 bcrypt crypt32 dnsapi user32 shell32 shcore wtsapi32 ole32)
 
 add_executable(ScreenlinkService service/36ScreenlinkService.cpp)
 set_target_properties(ScreenlinkService PROPERTIES OUTPUT_NAME "36ScreenlinkService")

@@ -17,6 +17,7 @@ import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.view.WindowManager
 import android.view.inputmethod.InputMethodManager
+import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.TextView
@@ -35,6 +36,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamServer.Ui {
     private lateinit var status: TextView
     private lateinit var softTarget: SoftKeyboardTarget
     private lateinit var keyboardButton: TextView
+    private lateinit var audioButton: TextView
+    private lateinit var pairButton: Button
+    private var audioOnTablet = false
     private var softKeyboardOpen = false
     private var server: StreamServer? = null
     private var streamWidth = 0
@@ -84,6 +88,28 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamServer.Ui {
         }
         val buttonSize = (56 * resources.displayMetrics.density).toInt()
         root.addView(keyboardButton, FrameLayout.LayoutParams(buttonSize, buttonSize, Gravity.TOP or Gravity.END))
+        audioButton = TextView(this).apply {
+            textSize = 14f
+            setTextColor(Color.WHITE)
+            setBackgroundColor(0x66000000)
+            gravity = Gravity.CENTER
+            alpha = 0.45f
+            visibility = View.GONE
+            setOnClickListener { server?.requestAudioRoute(!audioOnTablet) }
+        }
+        root.addView(audioButton, FrameLayout.LayoutParams(buttonSize * 2, buttonSize, Gravity.TOP or Gravity.END).apply {
+            marginEnd = buttonSize
+        })
+        pairButton = Button(this).apply {
+            text = "Nouvel appairage"
+            setOnClickListener {
+                server?.armPairing()
+                status.text = "Appairage autorisé : lancez 36Screenlink sur le PC"
+            }
+        }
+        root.addView(pairButton, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
+            bottomMargin = buttonSize
+        })
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING)
         setContentView(root)
         root.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> applyAspect() }
@@ -136,6 +162,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamServer.Ui {
         video.visibility = View.VISIBLE
         cursor.visibility = View.GONE
         status.visibility = View.VISIBLE
+        pairButton.visibility = View.VISIBLE
+        audioButton.visibility = View.GONE
         status.text = "$message\n${localAddress()}:${Protocol.PORT}"
     }
 
@@ -143,6 +171,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamServer.Ui {
         streamWidth = width
         streamHeight = height
         status.visibility = View.GONE
+        pairButton.visibility = View.GONE
+        audioButton.visibility = View.VISIBLE
         applyAspect()
     }
 
@@ -158,6 +188,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamServer.Ui {
             params.height = h
             video.layoutParams = params
         }
+    }
+
+    override fun onAudioRoute(onTablet: Boolean) = runOnUiThread {
+        audioOnTablet = onTablet
+        audioButton.text = if (onTablet) "\uD83D\uDD0A Tablette" else "\uD83D\uDD0A PC"
     }
 
     override fun confirmPairing(code: Int): Boolean {

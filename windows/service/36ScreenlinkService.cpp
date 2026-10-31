@@ -37,7 +37,10 @@ HANDLE startAgent(DWORD session) {
     GetModuleFileNameW(nullptr, path, MAX_PATH);
     const std::filesystem::path dir = std::filesystem::path(path).parent_path();
     const std::wstring exe = (dir / L"36Screenlink.exe").wstring();
-    std::wstring cmd = L"\"" + exe + L"\" --system --auto";
+    std::wstring cmd = L"\"" + exe + L"\" --system --auto --tray";
+    DWORD secure = 0, size = sizeof(secure);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\36Screenlink", L"SecureScreens", RRF_RT_REG_DWORD, nullptr, &secure, &size) == ERROR_SUCCESS && secure == 1)
+        cmd += L" --secure";
 
     HANDLE self = nullptr, token = nullptr;
     if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ALL_ACCESS, &self)) return nullptr;
@@ -64,7 +67,12 @@ HANDLE startAgent(DWORD session) {
 
 void stopAgent(HANDLE& agent) {
     if (!agent) return;
-    TerminateProcess(agent, 0);
+    // Arrêt demandé d'abord : l'agent doit rétablir le son du PC avant de partir.
+    if (HANDLE quit = OpenEventW(EVENT_MODIFY_STATE, FALSE, L"Global\\ScreenlinkQuit")) {
+        SetEvent(quit);
+        CloseHandle(quit);
+    }
+    if (WaitForSingleObject(agent, 3000) != WAIT_OBJECT_0) TerminateProcess(agent, 0);
     WaitForSingleObject(agent, 5000);
     CloseHandle(agent);
     agent = nullptr;

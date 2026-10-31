@@ -11,17 +11,27 @@ constexpr UINT kTrayMessage = WM_APP + 1;
 constexpr UINT kStatusTimer = 1;
 constexpr UINT kCmdQuit = 1;
 constexpr UINT kCmdLog = 2;
+constexpr UINT kCmdAudioPc = 3;
+constexpr UINT kCmdAudioTablet = 4;
 
-std::function<std::wstring()> gStatus;
-std::function<void()> gQuit;
-std::wstring gLogPath;
+TrayConfig gConfig;
 NOTIFYICONDATAW gIcon{};
+bool gIconAdded = false;
+UINT gTaskbarCreated = 0;
 HWND gWindow = nullptr;
 std::mutex gAlertMutex;
 std::wstring gLastAlert;
 
+// Le service démarre avant l'ouverture de session : la barre des tâches peut ne pas encore exister.
+void ensureIcon() {
+    if (gIconAdded) return;
+    gIcon.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+    gIconAdded = Shell_NotifyIconW(NIM_ADD, &gIcon) != FALSE;
+}
+
 void refreshTip() {
-    wcsncpy_s(gIcon.szTip, gStatus().c_str(), _TRUNCATE);
+    ensureIcon();
+    wcsncpy_s(gIcon.szTip, gConfig.status().c_str(), _TRUNCATE);
     gIcon.uFlags = NIF_TIP;
     Shell_NotifyIconW(NIM_MODIFY, &gIcon);
 }
@@ -31,17 +41,25 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case kTrayMessage:
         if (LOWORD(lp) == WM_RBUTTONUP || LOWORD(lp) == WM_LBUTTONUP) {
             HMENU menu = CreatePopupMenu();
-            AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, gStatus().c_str());
+            const bool onTablet = gConfig.audioOnTablet();
+            AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, gConfig.status().c_str());
             AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-            AppendMenuW(menu, MF_STRING, kCmdLog, L"Ouvrir le journal");
-            AppendMenuW(menu, MF_STRING, kCmdQuit, L"Quitter");
+            AppendMenuW(menu, MF_STRING | (onTablet ? 0 : MF_CHECKED), kCmdAudioPc, L"Son sur le PC");
+            AppendMenuW(menu, MF_STRING | (onTablet ? MF_CHECKED : 0), kCmdAudioTablet, L"Son sur la tablette");
+            if (!gConfig.managedByService) {
+                AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+                AppendMenuW(menu, MF_STRING, kCmdLog, L"Ouvrir le journal");
+                AppendMenuW(menu, MF_STRING, kCmdQuit, L"Quitter");
+            }
             POINT p;
             GetCursorPos(&p);
             SetForegroundWindow(hwnd);
             const UINT cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_NONOTIFY, p.x, p.y, 0, hwnd, nullptr);
             DestroyMenu(menu);
             if (cmd == kCmdQuit) DestroyWindow(hwnd);
-            if (cmd == kCmdLog) ShellExecuteW(nullptr, L"open", gLogPath.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+            if (cmd == kCmdLog) ShellExecuteW(nullptr, L"open", gConfig.logPath.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+            if (cmd == kCmdAudioPc) gConfig.setAudioOnTablet(false);
+            if (cmd == kCmdAudioTablet) gConfig.setAudioOnTablet(true);
         }
         return 0;
     case WM_TIMER:
@@ -50,27 +68,34 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_DESTROY:
         Shell_NotifyIconW(NIM_DELETE, &gIcon);
         gWindow = nullptr;
-        gQuit();
+        gConfig.onQuit();
         PostQuitMessage(0);
         return 0;
     default:
+        if (msg == gTaskbarCreated && gTaskbarCreated != 0) {
+            gIconAdded = false; // Explorateur relancé : l'icône est à recréer
+            ensureIcon();
+            return 0;
+        }
         return DefWindowProcW(hwnd, msg, wp, lp);
     }
 }
 
 } // namespace
 
-void runTray(const std::function<std::wstring()>& status, const std::function<void()>& onQuit, const std::wstring& logPath) {
-    gStatus = status;
-    gQuit = onQuit;
-    gLogPath = logPath;
+void runTray(const TrayConfig& config) {
+    gConfig = config;
+    gTaskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
 
     WNDCLASSW wc{};
     wc.lpfnWndProc = wndProc;
     wc.hInstance = GetModuleHandleW(nullptr);
     wc.lpszClassName = L"ScreenlinkTray";
     RegisterClassW(&wc);
-    HWND hwnd = CreateWindowExW(0, wc.lpszClassName, L"", 0, 0, 0, 0, 0, HWND_MESSAGE, nullptr, wc.hInstance, nullptr);
+    // Fenêtre invisible et non « message-only » : seule une fenêtre de premier niveau reçoit TaskbarCreated.
+    HWND hwnd = CreateWindowExW(WS_EX_TOOLWINDOW, wc.lpszClassName, L"", WS_POPUP, 0, 0, 0, 0, nullptr, nullptr, wc.hInstance, nullptr);
+    ChangeWindowMessageFilterEx(hwnd, gTaskbarCreated, MSGFLT_ALLOW, nullptr);
+    ChangeWindowMessageFilterEx(hwnd, kTrayMessage, MSGFLT_ALLOW, nullptr);
 
     gIcon.cbSize = sizeof(gIcon);
     gIcon.hWnd = hwnd;
@@ -79,7 +104,7 @@ void runTray(const std::function<std::wstring()>& status, const std::function<vo
     gIcon.uCallbackMessage = kTrayMessage;
     gIcon.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
     wcscpy_s(gIcon.szTip, L"36Screenlink");
-    Shell_NotifyIconW(NIM_ADD, &gIcon);
+    ensureIcon();
     gWindow = hwnd;
     SetTimer(hwnd, kStatusTimer, 1000, nullptr);
 

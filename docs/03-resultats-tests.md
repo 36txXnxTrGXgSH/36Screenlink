@@ -1,5 +1,22 @@
 # Résultats de tests — 2026-10-31
 
+## Installateur 1.1.0
+
+Test de bout en bout sur le PC de référence, tablette réinstallée à zéro, avec `36Screenlink-Setup.exe`.
+
+| Vérification | Résultat |
+|---|---|
+| Installation du pilote et du service sans script | OK, constaté dans le journal |
+| Démarrage de l'agent par le service, sans UAC | OK |
+| Clé illisible et dossier non modifiable par un compte standard | OK, vérifié depuis un compte non élevé |
+| Aucune clé privée restante après signature | OK |
+| Icône et menu du son sous SYSTEM | OK, constaté par l'utilisateur |
+| Son sur la tablette, PC silencieux | OK, constaté par l'utilisateur |
+| Passage automatique en Wi-Fi au retrait du câble | OK, constaté par l'utilisateur |
+| Appairage en Wi-Fi après effacement de l'application | OK, constaté par l'utilisateur |
+| Windows vierge, autre GPU NVIDIA, autre appareil Android | **Non testé** |
+| Option UAC et déverrouillage avec l'installateur | **Non testée** depuis l'installateur |
+| Désinstallation complète | **Non testée** |
 ## Écran étendu par le pilote IDD
 
 Pilote installé par l'utilisateur en administrateur, avec HVCI actif, sans avoir demandé le mode test. Windows voit `Generic Monitor`, identifiant `DISPLAY\SXT0136`, sortie `\\.\DISPLAY21` en 2944×1840, échelle 200 %. Le rapport PnP indique `IsSigned=False` : le pilote se charge quand même ; il ne reflète pas les signatures hors Microsoft.

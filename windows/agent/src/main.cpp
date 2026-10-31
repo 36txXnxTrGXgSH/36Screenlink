@@ -13,6 +13,7 @@
 #include <string>
 #include <thread>
 
+#include "audio.h"
 #include "capture.h"
 #include "channel.h"
 #include "desktop.h"
@@ -33,7 +34,6 @@ enum class Link { Usb, Wifi };
 struct Options {
     Link link = Link::Usb;
     bool autoLink = false; // USB si la tablette y répond, sinon Wi-Fi
-    bool pair = false;
     bool system = false;
     std::string wifiHost;
     std::wstring adbPath;
@@ -52,6 +52,7 @@ struct Options {
 };
 
 std::atomic<bool> gStop{false};
+std::atomic<bool> gAudioOnTablet{false};
 std::mutex gStatusMutex;
 std::wstring gStatus = L"Démarrage";
 VirtualMonitor gMonitor;
@@ -91,34 +92,6 @@ std::wstring findAdb(const Options& opt) {
     // Un agent SYSTEM ne doit jamais exécuter un adb trouvé dans un dossier modifiable.
     if (std::filesystem::exists(local) || gSystemMode) return local.wstring();
     return L"adb.exe";
-}
-
-int runPairing(Options opt) {
-    opt.link = Link::Usb;
-    opt.autoLink = false;
-    if (!runAdb(opt, L"forward tcp:7236 tcp:7236")) {
-        std::printf("adb ne voit pas la tablette : vérifiez le câble, le débogage USB et adb.exe.\n");
-        return 1;
-    }
-    SecureChannel ch;
-    Key256 psk{};
-    const bool ok = ch.connectTo("127.0.0.1", proto::kPort, 3000) && ch.pair(psk, [](uint32_t code) {
-        std::printf("\nCode d'appairage : %06u\nLe même code s'affiche-t-il sur la tablette ? (o/n) ", code);
-        std::fflush(stdout);
-        char answer[8] = {};
-        return std::fgets(answer, sizeof(answer), stdin) && (answer[0] == 'o' || answer[0] == 'O');
-    });
-    if (!ok) {
-        std::printf("Appairage annulé : %s\n", ch.lastError().c_str());
-        return 1;
-    }
-    if (!savePsk(psk)) {
-        std::printf("Enregistrement de la clé impossible.\n");
-        return 1;
-    }
-    SecureZeroMemory(psk.data(), psk.size());
-    std::printf("Appairage réussi.\n");
-    return 0;
 }
 
 // Exécute adb sans fenêtre et renvoie sa sortie standard.
@@ -258,7 +231,7 @@ struct SessionStats {
 };
 
 void receiverLoop(SecureChannel& ch, TouchInjector& touch, KeyInjector& keys, PenInjector& pen, SessionStats& stats, std::atomic<bool>& alive) {
-    if (gSystemMode) attachInputDesktop();
+    if (gSecureMode) attachInputDesktop();
     std::vector<uint8_t> msg;
     int64_t bestRtt = INT64_MAX;
     while (alive && ch.receive(msg)) {
@@ -320,6 +293,12 @@ void receiverLoop(SecureChannel& ch, TouchInjector& touch, KeyInjector& keys, Pe
             pen.apply(s);
             break;
         }
+        case proto::kAudioRoute: {
+            const bool onTablet = r.u8() != 0;
+            gAudioOnTablet = onTablet;
+            saveAudioOnTablet(onTablet);
+            break;
+        }
         case proto::kText:
             keys.text(std::string(reinterpret_cast<const char*>(msg.data() + 1), msg.size() - 1));
             break;
@@ -328,6 +307,33 @@ void receiverLoop(SecureChannel& ch, TouchInjector& touch, KeyInjector& keys, Pe
         }
     }
     alive = false;
+}
+
+// Après un refus, on attend avant de redemander : pas de fenêtres en rafale.
+constexpr auto kPairingRetry = std::chrono::seconds(60);
+
+bool askPairingCode(uint32_t code) {
+    wchar_t text[220];
+    swprintf_s(text, L"Code d'appairage : %06u\n\nLe même code s'affiche-t-il sur la tablette ?\nRépondez Non s'il est différent.", code);
+    return MessageBoxW(nullptr, text, L"36Screenlink", MB_YESNO | MB_ICONQUESTION | MB_TOPMOST | MB_SETFOREGROUND) == IDYES;
+}
+
+// Échange ECDH : rien n'est enregistré sans confirmation du même code des deux côtés.
+void tryPairing(SecureChannel& ch) {
+    static std::chrono::steady_clock::time_point lastFailure{};
+    const auto now = std::chrono::steady_clock::now();
+    if (lastFailure.time_since_epoch().count() != 0 && now - lastFailure < kPairingRetry) return;
+    setStatus(L"Appairage en cours");
+    Key256 psk{};
+    if (ch.pair(psk, askPairingCode) && savePsk(psk)) {
+        SecureZeroMemory(psk.data(), psk.size());
+        std::printf("Appairage réussi.\n");
+        trayClearAlert();
+        return;
+    }
+    lastFailure = std::chrono::steady_clock::now();
+    std::printf("Appairage annulé : %s\n", ch.lastError().c_str());
+    trayAlert(L"Appairage impossible. Sur la tablette, ouvrez l'application et touchez Nouvel appairage.");
 }
 
 // Une session complète. Renvoie false pour arrêter, true pour tenter une reconnexion.
@@ -340,16 +346,19 @@ bool runSession(const Options& opt, const std::string& host) {
 
     auto psk = loadPsk();
     if (!psk) {
-        std::printf("Pas de clé d'appairage : lancez Appairer.cmd, tablette branchée en USB.\n");
-        trayAlert(L"Tablette non appairée : lancez Appairer.cmd avec le câble branché.");
-        return gSystemMode; // le service attend l'appairage au lieu de s'arrêter
-    }
-    if (!ch.handshake(*psk)) {
-        // Jamais de renvoi automatique de clé : seul un appairage confirmé par l'utilisateur en crée une.
-        std::printf("Authentification : %s\n", ch.lastError().c_str());
-        trayAlert(L"La tablette refuse la clé : relancez Appairer.cmd.");
+        tryPairing(ch);
         return true;
     }
+    if (!ch.handshake(*psk)) {
+        // Tablette réinstallée ou autre appareil : la clé n'est jamais renvoyée, il faut un
+        // nouvel appairage. La tablette le refuse tant que l'utilisateur ne l'a pas demandé.
+        std::printf("Authentification : %s\n", ch.lastError().c_str());
+        ch.shutdown();
+        SecureChannel again;
+        if (again.connectTo(host, proto::kPort, 3000)) tryPairing(again);
+        return true;
+    }
+
 
     std::vector<uint8_t> msg;
     if (!ch.receive(msg) || msg.empty() || msg[0] != proto::kHello) return true;
@@ -359,7 +368,7 @@ bool runSession(const Options& opt, const std::string& host) {
     std::printf("Tablette : %ux%u, %u Hz, codecs 0x%02x\n", tabletW, tabletH, tabletFps, codecs);
 
     bool secureDesktop = false;
-    if (gSystemMode) {
+    if (gSecureMode) {
         attachInputDesktop();
         secureDesktop = secureScreenActive();
     }
@@ -479,13 +488,32 @@ bool runSession(const Options& opt, const std::string& host) {
     int refinements = 0;
     bool keepRunning = true;
     std::wstring linkName = opt.link == Link::Usb ? L"USB" : L"Wi-Fi";
+    AudioStreamer audio;
+    bool audioRunning = false, audioStateSent = false;
 
     while (alive && !gStop) {
+        const bool audioWanted = gAudioOnTablet;
+        if (audioWanted != audioRunning || !audioStateSent) {
+            if (audioWanted && !audioRunning) {
+                audio.start([&](uint32_t rate, const int16_t* samples, size_t frames) {
+                    proto::Writer w(proto::kAudio);
+                    w.u32(rate).bytes(samples, frames * 4);
+                    return ch.send(w.data());
+                });
+            } else if (!audioWanted && audioRunning) {
+                audio.stop();
+            }
+            audioRunning = audioWanted;
+            audioStateSent = true;
+            proto::Writer w(proto::kAudioState);
+            w.u8(audioWanted ? 1 : 0);
+            ch.send(w.data());
+        }
         if (opt.durationSec > 0 && nowUs() - startUs > static_cast<uint64_t>(opt.durationSec) * 1'000'000) {
             keepRunning = false;
             break;
         }
-        if (gSystemMode && nowUs() - lastDesktopCheck > 250'000) {
+        if (gSecureMode && nowUs() - lastDesktopCheck > 250'000) {
             lastDesktopCheck = nowUs();
             // Passage vers ou depuis UAC et verrouillage : nouvelle session sur le bon écran.
             if (secureScreenActive() != secureDesktop) {
@@ -498,9 +526,10 @@ bool runSession(const Options& opt, const std::string& host) {
         const auto result = cap.acquire(timeoutMs, capTarget.Get(), frame);
         if (result == Capturer::Result::Lost) {
             // UAC, changement de mode ou verrouillage : la duplication est à refaire.
-            Sleep(100);
-            if (gSystemMode) attachInputDesktop();
-            if (!cap.open(*output)) std::printf("Reprise de capture : %s\n", cap.lastError().c_str());
+            // Sans suivi du bureau sécurisé, la capture attend simplement le retour de Windows.
+            Sleep(gSecureMode ? 100 : 500);
+            if (gSecureMode) attachInputDesktop();
+            if (!cap.open(*output) && gSecureMode) std::printf("Reprise de capture : %s\n", cap.lastError().c_str());
             forceIdr = true;
             continue;
         }
@@ -618,6 +647,7 @@ bool runSession(const Options& opt, const std::string& host) {
         }
     }
     timeEndPeriod(1);
+    audio.stop();
 
     alive = false;
     ch.shutdown();
@@ -650,7 +680,8 @@ std::string resolveHost(Options& opt) {
     }
     if (!opt.wifiHost.empty()) return opt.wifiHost;
     std::string found = discoverTablet(3000);
-    if (found.empty()) found = loadTabletAddress();
+    if (found.empty()) return loadTabletAddress();
+    saveTabletAddress(found);
     return found;
 }
 
@@ -693,9 +724,8 @@ Options parseArgs(int argc, wchar_t** argv) {
         else if (a == L"--tray") o.tray = true;
         else if (a == L"--no-monitor") o.virtualMonitor = false;
         else if (a == L"--auto") o.autoLink = true;
-        else if (a == L"--pair") o.pair = true;
-        else if (a == L"--system-store") gSystemMode = true;
         else if (a == L"--system") o.system = true;
+        else if (a == L"--secure") gSecureMode = true;
         else if (a == L"--simulate-congestion") o.simulateCongestion = true;
         else if (a == L"--duration") o.durationSec = std::stoi(next());
         else if (a == L"--list") o.listOnly = true;
@@ -705,7 +735,7 @@ Options parseArgs(int argc, wchar_t** argv) {
 }
 
 // Nom lié à la session : chaque agent surveille cet événement, signalé par --stop.
-constexpr wchar_t kQuitEvent[] = L"Local\\ScreenlinkQuit";
+constexpr wchar_t kQuitEvent[] = L"Global\\ScreenlinkQuit";
 
 } // namespace
 
@@ -729,11 +759,6 @@ int wmain(int argc, wchar_t** argv) {
         return 0;
     }
 
-    if (opt.pair) {
-        const int result = runPairing(opt);
-        WSACleanup();
-        return result;
-    }
 
     if (opt.stopOthers) {
         HANDLE quit = OpenEventW(EVENT_MODIFY_STATE, FALSE, kQuitEvent);
@@ -753,12 +778,7 @@ int wmain(int argc, wchar_t** argv) {
         return 0;
     }
 
-    if (opt.system) {
-        gSystemMode = true;
-        // Lancé sans console par le service : le journal est la seule sortie.
-#pragma warning(suppress : 4996)
-        if (_wfreopen(logFilePath().c_str(), L"w", stdout)) setvbuf(stdout, nullptr, _IONBF, 0);
-    }
+    gSystemMode = opt.system;
 
     HANDLE quitEvent = CreateEventW(nullptr, TRUE, FALSE, kQuitEvent);
     std::thread quitWatcher([quitEvent] {
@@ -774,9 +794,18 @@ int wmain(int argc, wchar_t** argv) {
         // donc le journal reste lisible pendant que l'agent tourne.
 #pragma warning(suppress : 4996)
         if (_wfreopen(logPath.c_str(), L"w", stdout)) setvbuf(stdout, nullptr, _IONBF, 0);
+        AudioStreamer::recoverMute();
+        gAudioOnTablet = loadAudioOnTablet();
         if (opt.virtualMonitor && opt.outputIndex < 0) gMonitor.start();
         std::thread worker(serviceLoop, opt);
-        runTray([] { std::lock_guard lock(gStatusMutex); return gStatus; }, [] { gStop = true; }, logPath);
+        TrayConfig tray;
+        tray.status = [] { std::lock_guard lock(gStatusMutex); return gStatus; };
+        tray.onQuit = [] { gStop = true; };
+        tray.audioOnTablet = [] { return gAudioOnTablet.load(); };
+        tray.setAudioOnTablet = [](bool onTablet) { gAudioOnTablet = onTablet; saveAudioOnTablet(onTablet); };
+        tray.logPath = logPath;
+        tray.managedByService = opt.system;
+        runTray(tray);
         worker.join();
     } else {
         if (opt.virtualMonitor && opt.outputIndex < 0) gMonitor.start();

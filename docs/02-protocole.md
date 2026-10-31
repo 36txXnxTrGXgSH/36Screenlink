@@ -1,4 +1,4 @@
-# Protocole v1
+# Protocole v3
 
 Implémentation : `windows/agent/src/protocol.h`, `channel.cpp` côté PC, `Protocol.kt`, `StreamServer.kt`, `Crypto.kt` côté tablette.
 
@@ -15,7 +15,7 @@ Entiers en big-endian.
 
 ## Appairage
 
-Possible uniquement par le tunnel USB : la tablette refuse le mode appairage si la connexion ne vient pas de la boucle locale. Cette règle ne protège pas d'une application locale à la tablette, d'où l'ECDH et le code à comparer.
+Possible en USB comme en Wi-Fi. Le code comparé des deux côtés écarte un intrus du réseau ou une application locale. Une tablette déjà appairée refuse le mode appairage tant que l'utilisateur n'a pas touché *Nouvel appairage*.
 
 ```text
 PC → "S36X" u8 version, u8 mode=1, nonceC[16], pubA[64]
@@ -67,6 +67,9 @@ Nonce de 12 octets : 4 octets nuls, puis compteur 64 bits propre à chaque sens.
 | 11 | CLOCK | PC→T | i64 décalage (tablette − PC) en µs |
 | 12 | KEY | T→PC | u8 appui, u16 code (scancode set 1, 0x100 = préfixe E0) |
 | 13 | TEXT | T→PC | Texte UTF-8 du clavier à l'écran |
+| 15 | AUDIO | PC→T | u32 fréquence, PCM stéréo 16 bits little-endian |
+| 16 | AUDIO_ROUTE | T→PC | u8 sortie demandée (0 PC, 1 tablette) |
+| 17 | AUDIO_STATE | PC→T | u8 sortie active (0 PC, 1 tablette) |
 | 14 | PEN | T→PC | u8 état (1 portée, 2 contact, 4 bouton, 8 gomme), u16 x, u16 y, u16 pression 0..1024, i8 tiltX, i8 tiltY, u16 rotation |
 
 À un changement d'orientation, la tablette ferme la session. Le PC se reconnecte et lit la nouvelle orientation dans HELLO : hauteur supérieure à la largeur signifie portrait.
@@ -81,4 +84,4 @@ Un ping part toutes les 250 ms. Seul l'aller-retour le plus court met à jour le
 
 - Pas de confidentialité persistante : compromettre la clé partagée permet de déchiffrer une session enregistrée.
 - Le Wi-Fi utilise TCP. La variante UDP avec NACK/FEC reste à faire ; TCP ajoute de la latence en cas de perte radio.
-- QR code non implémenté : l'appairage passe par USB, avec un code à comparer.
+- QR code non implémenté : l'appairage repose sur un code à comparer.

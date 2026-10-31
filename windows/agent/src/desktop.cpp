@@ -4,6 +4,7 @@
 #include <wtsapi32.h>
 
 bool gSystemMode = false;
+bool gSecureMode = false;
 
 std::wstring inputDesktopName() {
     HDESK desk = OpenInputDesktop(0, FALSE, GENERIC_READ);

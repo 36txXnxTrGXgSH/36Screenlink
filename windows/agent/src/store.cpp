@@ -45,6 +45,23 @@ std::wstring logFilePath() {
     return (dir / L"agent.log").wstring();
 }
 
+std::wstring dataFilePath(const wchar_t* name) {
+    const fs::path dir = dataDir();
+    fs::create_directories(dir);
+    return (dir / name).wstring();
+}
+
+bool loadAudioOnTablet() {
+    std::ifstream in(dataDir() / L"audio.txt");
+    int value = 0;
+    in >> value;
+    return value == 1;
+}
+
+void saveAudioOnTablet(bool onTablet) {
+    std::ofstream(dataFilePath(L"audio.txt"), std::ios::trunc) << (onTablet ? 1 : 0);
+}
+
 std::optional<Key256> loadPsk() {
     std::ifstream in(dataDir() / L"pairing.bin", std::ios::binary);
     if (!in) return std::nullopt;

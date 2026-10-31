@@ -2,8 +2,19 @@
 #include <functional>
 #include <string>
 
+struct TrayConfig {
+    std::function<std::wstring()> status;
+    std::function<void()> onQuit;
+    std::function<bool()> audioOnTablet;
+    std::function<void(bool)> setAudioOnTablet;
+    std::wstring logPath;
+    // Lancé par le service sous SYSTEM : ni « Quitter », que le service annulerait, ni
+    // ouverture du journal, qui lancerait un éditeur avec les droits SYSTEM.
+    bool managedByService = false;
+};
+
 // Boucle de message de l'icône de notification. Bloque jusqu'à « Quitter ».
-void runTray(const std::function<std::wstring()>& status, const std::function<void()>& onQuit, const std::wstring& logPath);
+void runTray(const TrayConfig& config);
 // Ferme l'icône depuis un autre thread, par le même chemin que « Quitter ».
 void trayClose();
 // Notification Windows, une seule fois tant que le message ne change pas.

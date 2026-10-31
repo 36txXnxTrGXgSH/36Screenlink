@@ -76,6 +76,8 @@ class PairingStore(private val file: File) {
         }.generateKey()
     }
 
+    fun exists() = file.exists()
+
     fun save(psk: ByteArray) {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, wrappingKey())
