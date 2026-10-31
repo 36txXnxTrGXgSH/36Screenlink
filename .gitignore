@@ -1,0 +1,21 @@
+# Compilation
+windows/build/
+windows/driver/build/
+windows/driver/dist/
+android/.gradle/
+android/.kotlin/
+android/app/build/
+android/build/
+
+# Version portable, reconstruite depuis les sources
+dist/
+
+# Local à la machine
+android/local.properties
+android/keystore.properties
+*.jks
+*.keystore
+*.pfx
+
+windows/driver/build/
+

@@ -1,0 +1,1 @@
+Ce fichier garde les donnees dans le dossier data, a cote de l exe.
