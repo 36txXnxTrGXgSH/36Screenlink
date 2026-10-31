@@ -27,6 +27,7 @@
 #include "protocol.h"
 #include "store.h"
 #include "tray.h"
+#include "window_follow.h"
 
 #pragma comment(lib, "winmm.lib")
 
@@ -292,7 +293,7 @@ struct SessionStats {
     std::atomic<int64_t> lastPongUs{0};
 };
 
-void receiverLoop(SecureChannel& ch, TouchInjector& touch, KeyInjector& keys, PenInjector& pen, SessionStats& stats, std::atomic<bool>& alive) {
+void receiverLoop(SecureChannel& ch, TouchInjector& touch, KeyInjector& keys, PenInjector& pen, WindowFollower& follower, SessionStats& stats, std::atomic<bool>& alive) {
     if (gSecureMode) attachInputDesktop();
     std::vector<uint8_t> msg;
     int64_t bestRtt = INT64_MAX;
@@ -336,6 +337,7 @@ void receiverLoop(SecureChannel& ch, TouchInjector& touch, KeyInjector& keys, Pe
                 contacts.push_back(c);
             }
             touch.apply(contacts);
+            follower.onContact(std::any_of(contacts.begin(), contacts.end(), [](const Contact& c) { return c.down; }));
             break;
         }
         case proto::kKey: {
@@ -353,6 +355,7 @@ void receiverLoop(SecureChannel& ch, TouchInjector& touch, KeyInjector& keys, Pe
             s.tiltY = static_cast<int8_t>(r.u8());
             s.rotation = r.u16();
             pen.apply(s);
+            follower.onContact((s.state & proto::kPenContact) != 0);
             break;
         }
         case proto::kControl: {
@@ -530,11 +533,15 @@ bool runSession(const Options& opt, const std::string& host) {
         if (!ch.send(w.data())) return true;
     }
 
+    // Utile seulement en écran étendu : ailleurs, aucune fenêtre n'est sur un autre écran visible.
+    WindowFollower follower;
+    if (opt.injectTouch && !mirrorPrimary && output->isVirtual && displayMode == proto::kDisplayExtended) follower.start(output->desktop);
+
     trayClearAlert();
     SessionStats stats;
     stats.lastPongUs = static_cast<int64_t>(nowUs());
     std::atomic<bool> alive{true};
-    std::thread receiver(receiverLoop, std::ref(ch), std::ref(touch), std::ref(keys), std::ref(pen), std::ref(stats), std::ref(alive));
+    std::thread receiver(receiverLoop, std::ref(ch), std::ref(touch), std::ref(keys), std::ref(pen), std::ref(follower), std::ref(stats), std::ref(alive));
     std::thread pinger([&] {
         while (alive && !gStop) {
             proto::Writer w(proto::kPing);
@@ -641,7 +648,10 @@ bool runSession(const Options& opt, const std::string& host) {
         // Échéancier et non délai depuis la dernière image : une image un peu en avance
         // passe sans attendre, sinon la suivante l'écraserait et la cadence chuterait.
         const bool due = now >= nextEncodeUs;
-        if (((pending && due) || refine || (forceIdr && pending)) || stats.requestIdr.exchange(false)) {
+        // La tablette ignore tout jusqu'à une image clé : sa demande passe même sur un écran immobile.
+        const bool idrRequested = stats.requestIdr.exchange(false);
+        if (idrRequested) forceIdr = true;
+        if ((pending && due) || refine || (forceIdr && pending) || idrRequested) {
             const bool idr = forceIdr;
             forceIdr = false;
             const uint64_t pts = pending ? pendingPts : now;

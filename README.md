@@ -48,6 +48,7 @@ Sur la tablette, **glissez depuis le bord gauche vers le centre** pour ouvrir le
 
 - **Menu Démarrer :** l'icône 36Screenlink relance le service si besoin. Il démarre déjà avec Windows.
 - **Quitter :** clic droit sur l'icône près de l'horloge, puis *Quitter*. L'application reste fermée jusqu'à l'icône du menu Démarrer ou au prochain démarrage de Windows.
+- **Barre des tâches de la tablette :** en mode Étendu, une fenêtre activée d'une touche sur la tablette y vient, même si elle était sur l'écran principal. Elle y reste, jusqu'à ce que vous la déplaciez.
 - **Son depuis le PC :** clic droit sur l'icône près de l'horloge.
 - **Rotation :** l'écran Windows suit l'appareil, avec une coupure d'environ une seconde.
 - **Résolution :** le mode le plus proche de l'appareil est choisi, jusqu'à 120 Hz. Sans mode identique, l'image a des bandes noires.

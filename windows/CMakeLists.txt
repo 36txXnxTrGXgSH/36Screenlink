@@ -20,6 +20,7 @@ add_executable(ScreenlinkAgent
     agent/src/monitor.cpp
     agent/src/store.cpp
     agent/src/tray.cpp
+    agent/src/window_follow.cpp
     agent/res/app.rc
 )
 
@@ -28,7 +29,7 @@ target_include_directories(ScreenlinkAgent PRIVATE third_party/nvenc)
 target_compile_definitions(ScreenlinkAgent PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_compile_options(ScreenlinkAgent PRIVATE /W4 /permissive- /utf-8)
 target_link_libraries(ScreenlinkAgent PRIVATE
-    d3d11 dxgi ws2_32 bcrypt crypt32 dnsapi user32 shell32 shcore wtsapi32 ole32 advapi32 oleaut32 mf mfplat mfuuid strmiids)
+    d3d11 dxgi ws2_32 bcrypt crypt32 dnsapi user32 shell32 shcore wtsapi32 ole32 advapi32 oleaut32 mf mfplat mfuuid strmiids dwmapi)
 
 add_executable(ScreenlinkService service/36ScreenlinkService.cpp)
 set_target_properties(ScreenlinkService PROPERTIES OUTPUT_NAME "36ScreenlinkService")

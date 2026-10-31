@@ -1,5 +1,19 @@
 # Résultats de tests — 2026-10-31
 
+## Fenêtres amenées sur la tablette 1.4.1
+
+Test sur le service installé, touches simulées par adb sur l'icône de Bloc-notes dans la barre des tâches de la tablette.
+
+| Vérification | Résultat |
+|---|---|
+| Fenêtre sur l'écran principal, pas au premier plan | OK, amenée sur la tablette et activée |
+| Fenêtre sur l'écran principal, déjà au premier plan | OK, réduite par Windows puis rouverte sur la tablette |
+| Fenêtre agrandie sur l'écran principal | OK, agrandie sur la tablette |
+| Glissement long sur la tablette | OK, la fenêtre de l'écran principal ne bouge pas |
+| Doigt réel, application lancée pour la première fois | **Non testé** |
+
+**Image figée corrigée :** quand le décodeur de la tablette saturait, elle attendait une image clé, mais l'agent répondait par une image ordinaire. L'image restait figée pour toute la session, avec tactile actif. Constaté après une réinstallation, 48 images perdues au démarrage. Après correction, 51 pertes au démarrage, image reprise et statistiques normales.
+
 ## Quitter et encodeur Media Foundation 1.4.0
 
 Test sur le PC et la tablette de référence, en USB, encodeur Media Foundation forcé par `--encoder mf`.

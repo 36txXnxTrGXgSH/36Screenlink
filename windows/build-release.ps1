@@ -1,6 +1,6 @@
 ﻿# Construit tout ce qui se publie : dist\release\36Screenlink-Setup.exe et 36Screenlink.apk.
 # Aucune donnée locale ne peut y entrer : l'installateur ne prend que les fichiers qu'il liste.
-param([string]$Version = '1.4.0')
+param([string]$Version = '1.4.1')
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot
 $out = Join-Path $root 'dist\release'
