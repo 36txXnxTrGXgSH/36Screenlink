@@ -7,7 +7,7 @@
 namespace proto {
 
 inline constexpr uint16_t kPort = 7236;
-inline constexpr uint8_t kVersion = 3;
+inline constexpr uint8_t kVersion = 4;
 inline constexpr char kMagic[4] = {'S', '3', '6', 'X'};
 inline constexpr uint32_t kMaxRecord = 8 * 1024 * 1024;
 
@@ -32,7 +32,12 @@ enum Msg : uint8_t {
     kAudio = 15,       // A->T u32 fréquence, PCM stéréo 16 bits little-endian
     kAudioRoute = 16,  // T->A u8 sortie demandée (0 PC, 1 tablette)
     kAudioState = 17,  // A->T u8 sortie active (0 PC, 1 tablette)
+    kControl = 18,     // T->A u8 réglage, u8 valeur
+    kControlState = 19, // A->T u8 mode d'affichage, u8 fréquence
 };
+
+enum Control : uint8_t { kControlDisplay = 1, kControlFps = 2 };
+enum DisplayMode : uint8_t { kDisplayExtended = 0, kDisplayDuplicate = 1, kDisplayTabletOnly = 2 };
 
 enum PenState : uint8_t { kPenInRange = 1, kPenContact = 2, kPenBarrel = 4, kPenEraser = 8 };
 

@@ -2,9 +2,11 @@ package com.screenlink36.app
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.graphics.Rect
 import android.os.Bundle
 import android.view.Gravity
 import android.view.KeyEvent
@@ -35,10 +37,15 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamServer.Ui {
     private lateinit var cursor: ImageView
     private lateinit var status: TextView
     private lateinit var softTarget: SoftKeyboardTarget
-    private lateinit var keyboardButton: TextView
-    private lateinit var audioButton: TextView
     private lateinit var pairButton: Button
+    private lateinit var menu: SideMenu
     private var audioOnTablet = false
+    private var displayMode = SideMenu.MODE_EXTENDED
+    private var frameRate = 120
+    private var rotationLocked = false
+    private var touchEnabled = true
+    private var edgeSwipeStart = -1f
+    private var edgeSwipeActive = false
     private var softKeyboardOpen = false
     private var server: StreamServer? = null
     private var streamWidth = 0
@@ -77,29 +84,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamServer.Ui {
         root.addView(status, FrameLayout.LayoutParams(MATCH, WRAP, Gravity.CENTER))
         softTarget = SoftKeyboardTarget(this) { server?.sendInput(it) }
         root.addView(softTarget, FrameLayout.LayoutParams(1, 1))
-        keyboardButton = TextView(this).apply {
-            text = "⌨"
-            textSize = 24f
-            setTextColor(Color.WHITE)
-            setBackgroundColor(0x66000000)
-            gravity = Gravity.CENTER
-            alpha = 0.45f
-            setOnClickListener { toggleSoftKeyboard() }
-        }
         val buttonSize = (56 * resources.displayMetrics.density).toInt()
-        root.addView(keyboardButton, FrameLayout.LayoutParams(buttonSize, buttonSize, Gravity.TOP or Gravity.END))
-        audioButton = TextView(this).apply {
-            textSize = 14f
-            setTextColor(Color.WHITE)
-            setBackgroundColor(0x66000000)
-            gravity = Gravity.CENTER
-            alpha = 0.45f
-            visibility = View.GONE
-            setOnClickListener { server?.requestAudioRoute(!audioOnTablet) }
-        }
-        root.addView(audioButton, FrameLayout.LayoutParams(buttonSize * 2, buttonSize, Gravity.TOP or Gravity.END).apply {
-            marginEnd = buttonSize
-        })
+        menu = SideMenu(this, menuActions)
+        refreshMenu()
+        root.addView(menu.view, FrameLayout.LayoutParams(MATCH, MATCH))
         pairButton = Button(this).apply {
             text = "Nouvel appairage"
             setOnClickListener {
@@ -112,8 +100,88 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamServer.Ui {
         })
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING)
         setContentView(root)
-        root.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> applyAspect() }
+        root.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+            applyAspect()
+            reserveLeftEdge()
+        }
         hideSystemBars()
+    }
+
+    // Sans cette réservation, Android traite le glissement depuis le bord comme un retour.
+    private fun reserveLeftEdge() {
+        val width = (EDGE_DP * resources.displayMetrics.density).toInt()
+        val height = (GESTURE_LIMIT_DP * resources.displayMetrics.density).toInt().coerceAtMost(root.height)
+        val top = (root.height - height) / 2
+        root.systemGestureExclusionRects = listOf(Rect(0, top, width, top + height))
+    }
+
+    private val menuActions = object : SideMenu.Actions {
+        override fun onAudioToggle() {
+            server?.requestAudioRoute(!audioOnTablet)
+        }
+
+        override fun onKeyboard() = toggleSoftKeyboard()
+
+        override fun onDisplayMode(mode: Int) {
+            server?.sendControl(Protocol.CONTROL_DISPLAY, mode)
+        }
+
+        override fun onFrameRateToggle() {
+            server?.sendControl(Protocol.CONTROL_FPS, if (frameRate == 120) 60 else 120)
+        }
+
+        override fun onRotationLockToggle() {
+            rotationLocked = !rotationLocked
+            requestedOrientation = if (rotationLocked) ActivityInfo.SCREEN_ORIENTATION_LOCKED else ActivityInfo.SCREEN_ORIENTATION_FULL_USER
+            refreshMenu()
+        }
+
+        override fun onTouchToggle() {
+            touchEnabled = !touchEnabled
+            refreshMenu()
+        }
+
+        override fun onWindowsKey() = pressKeys(KEY_WINDOWS)
+
+        override fun onShowDesktop() = pressKeys(KEY_WINDOWS, KEY_D)
+
+        override fun onDisconnect() {
+            menu.close()
+            server?.disconnect()
+            finishAffinity()
+        }
+    }
+
+    private fun pressKeys(vararg codes: Int) {
+        val s = server ?: return
+        codes.forEach { s.sendInput(Keyboard.keyMessage(true, it)) }
+        codes.reversed().forEach { s.sendInput(Keyboard.keyMessage(false, it)) }
+    }
+
+    private fun refreshMenu() = menu.update(audioOnTablet, displayMode, frameRate, rotationLocked, touchEnabled)
+
+    // Le geste commence au bord : rien ne part vers Windows tant qu'il n'est pas tranché.
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        val density = resources.displayMetrics.density
+        if (!menu.isOpen) when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                edgeSwipeActive = event.x < EDGE_DP * density
+                edgeSwipeStart = event.x
+                if (edgeSwipeActive) return true
+            }
+            MotionEvent.ACTION_MOVE -> if (edgeSwipeActive) {
+                if (event.x - edgeSwipeStart > SWIPE_DP * density) {
+                    edgeSwipeActive = false
+                    menu.open()
+                }
+                return true
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> if (edgeSwipeActive) {
+                edgeSwipeActive = false
+                return true
+            }
+        }
+        return super.dispatchTouchEvent(event)
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -163,7 +231,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamServer.Ui {
         cursor.visibility = View.GONE
         status.visibility = View.VISIBLE
         pairButton.visibility = View.VISIBLE
-        audioButton.visibility = View.GONE
         status.text = "$message\n${localAddress()}:${Protocol.PORT}"
     }
 
@@ -172,7 +239,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamServer.Ui {
         streamHeight = height
         status.visibility = View.GONE
         pairButton.visibility = View.GONE
-        audioButton.visibility = View.VISIBLE
         applyAspect()
     }
 
@@ -192,7 +258,17 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamServer.Ui {
 
     override fun onAudioRoute(onTablet: Boolean) = runOnUiThread {
         audioOnTablet = onTablet
-        audioButton.text = if (onTablet) "\uD83D\uDD0A Tablette" else "\uD83D\uDD0A PC"
+        refreshMenu()
+    }
+
+    override fun onControlState(displayMode: Int, fps: Int) = runOnUiThread {
+        this.displayMode = displayMode
+        frameRate = fps
+        refreshMenu()
+    }
+
+    override fun onStats(fps: Int, latencyMs: Int) = runOnUiThread {
+        menu.updateStats(fps, latencyMs)
     }
 
     override fun confirmPairing(code: Int): Boolean {
@@ -250,7 +326,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamServer.Ui {
 
     private fun sendTouch(event: MotionEvent) {
         val s = server ?: return
-        if (video.width == 0) return
+        if (video.width == 0 || !touchEnabled) return
         val action = event.actionMasked
         val lifted = when (action) {
             MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> event.actionIndex
@@ -341,5 +417,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamServer.Ui {
         private const val MAX_COORD = 65535
         private const val MAX_PEN_PRESSURE = 1024
         private const val PAIRING_WAIT_SECONDS = 110L
+        private const val EDGE_DP = 24
+        private const val SWIPE_DP = 48
+        private const val GESTURE_LIMIT_DP = 200
+        private const val KEY_WINDOWS = 0x15B
+        private const val KEY_D = 0x20
     }
 }

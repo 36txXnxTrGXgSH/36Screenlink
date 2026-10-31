@@ -102,7 +102,7 @@ void runTray(const TrayConfig& config) {
     gIcon.uID = 1;
     gIcon.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     gIcon.uCallbackMessage = kTrayMessage;
-    gIcon.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+    gIcon.hIcon = LoadIconW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(1));
     wcscpy_s(gIcon.szTip, L"36Screenlink");
     ensureIcon();
     gWindow = hwnd;

@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 
@@ -49,10 +50,14 @@ struct Options {
     int durationSec = 0;
     bool listOnly = false;
     bool stopOthers = false;
+    bool open = false;
 };
 
 std::atomic<bool> gStop{false};
 std::atomic<bool> gAudioOnTablet{false};
+std::atomic<uint8_t> gDisplayMode{proto::kDisplayExtended};
+std::atomic<uint32_t> gFps{120};
+std::atomic<bool> gRestartSession{false};
 std::mutex gStatusMutex;
 std::wstring gStatus = L"Démarrage";
 VirtualMonitor gMonitor;
@@ -174,6 +179,61 @@ void setBestMode(const std::wstring& device, uint32_t longSide, uint32_t shortSi
     Sleep(500);
 }
 
+// Mode « Tablette seule » : configuration temporaire, jamais enregistrée par Windows. Si
+// l'agent disparaît, le retrait du moniteur rend de lui-même l'écran du PC.
+struct DisplaySnapshot {
+    std::vector<DISPLAYCONFIG_PATH_INFO> paths;
+    std::vector<DISPLAYCONFIG_MODE_INFO> modes;
+};
+std::optional<DisplaySnapshot> gSavedDisplays;
+
+std::optional<DisplaySnapshot> queryDisplays() {
+    UINT32 pathCount = 0, modeCount = 0;
+    if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &pathCount, &modeCount) != ERROR_SUCCESS) return std::nullopt;
+    DisplaySnapshot s;
+    s.paths.resize(pathCount);
+    s.modes.resize(modeCount);
+    if (QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &pathCount, s.paths.data(), &modeCount, s.modes.data(), nullptr) != ERROR_SUCCESS) return std::nullopt;
+    s.paths.resize(pathCount);
+    s.modes.resize(modeCount);
+    return s;
+}
+
+bool useOnlyDisplay(const std::wstring& device) {
+    auto current = queryDisplays();
+    if (!current) return false;
+    for (const auto& path : current->paths) {
+        DISPLAYCONFIG_SOURCE_DEVICE_NAME name{};
+        name.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+        name.header.size = sizeof(name);
+        name.header.adapterId = path.sourceInfo.adapterId;
+        name.header.id = path.sourceInfo.id;
+        if (DisplayConfigGetDeviceInfo(&name.header) != ERROR_SUCCESS || device != name.viewGdiDeviceName) continue;
+        auto modes = current->modes;
+        if (path.sourceInfo.modeInfoIdx != DISPLAYCONFIG_PATH_MODE_IDX_INVALID) modes[path.sourceInfo.modeInfoIdx].sourceMode.position = {0, 0};
+        DISPLAYCONFIG_PATH_INFO only = path;
+        if (!gSavedDisplays) gSavedDisplays = current;
+        const LONG result = SetDisplayConfig(1, &only, static_cast<UINT32>(modes.size()), modes.data(),
+                                             SDC_APPLY | SDC_USE_SUPPLIED_DISPLAY_CONFIG | SDC_ALLOW_CHANGES);
+        std::printf("Tablette seule : résultat %ld\n", result);
+        Sleep(800);
+        return result == ERROR_SUCCESS;
+    }
+    return false;
+}
+
+void restoreDisplays() {
+    if (!gSavedDisplays) return;
+    auto& s = *gSavedDisplays;
+    LONG result = SetDisplayConfig(static_cast<UINT32>(s.paths.size()), s.paths.data(), static_cast<UINT32>(s.modes.size()), s.modes.data(),
+                                   SDC_APPLY | SDC_USE_SUPPLIED_DISPLAY_CONFIG | SDC_ALLOW_CHANGES);
+    // Si le moniteur virtuel a changé entre-temps, Windows reprend sa dernière configuration.
+    if (result != ERROR_SUCCESS) result = SetDisplayConfig(0, nullptr, 0, nullptr, SDC_APPLY | SDC_USE_DATABASE_CURRENT);
+    std::printf("Écrans du PC rétablis : résultat %ld\n", result);
+    gSavedDisplays.reset();
+    Sleep(800);
+}
+
 // Fait pivoter l'écran capturé pour suivre la tablette. Réglage non persistant.
 void setOrientation(const std::wstring& device, bool portrait) {
     DEVMODEW mode{};
@@ -293,6 +353,13 @@ void receiverLoop(SecureChannel& ch, TouchInjector& touch, KeyInjector& keys, Pe
             pen.apply(s);
             break;
         }
+        case proto::kControl: {
+            const uint8_t id = r.u8(), value = r.u8();
+            if (id == proto::kControlDisplay && value <= proto::kDisplayTabletOnly) gDisplayMode = value;
+            if (id == proto::kControlFps && (value == 60 || value == 120)) gFps = value;
+            gRestartSession = true;
+            break;
+        }
         case proto::kAudioRoute: {
             const bool onTablet = r.u8() != 0;
             gAudioOnTablet = onTablet;
@@ -372,17 +439,28 @@ bool runSession(const Options& opt, const std::string& host) {
         attachInputDesktop();
         secureDesktop = secureScreenActive();
     }
-    gMonitor.raise();
+    const uint8_t displayMode = gDisplayMode;
+    const uint32_t targetFps = gFps;
+    if (displayMode != proto::kDisplayTabletOnly) restoreDisplays();
+    // Dupliquer montre l'écran du PC : le moniteur virtuel n'a plus lieu d'être.
+    if (displayMode == proto::kDisplayDuplicate) {
+        gMonitor.release();
+        Sleep(800);
+    } else {
+        gMonitor.raise();
+    }
     auto outputs = enumerateOutputs();
-    const int wanted = secureDesktop ? primaryIndex(outputs) : opt.outputIndex;
+    const bool mirrorPrimary = secureDesktop || displayMode == proto::kDisplayDuplicate;
+    const int wanted = mirrorPrimary ? primaryIndex(outputs) : opt.outputIndex;
     const OutputInfo* output = pickOutput(outputs, wanted);
     if (!output) {
         std::printf("Aucun écran à capturer.\n");
         return false;
     }
-    if (!output->primary) {
-        setBestMode(output->deviceName, std::max(tabletW, tabletH), std::min(tabletW, tabletH), std::min<uint32_t>(opt.fps, tabletFps));
+    if (!mirrorPrimary && (!output->primary || gSavedDisplays)) {
+        setBestMode(output->deviceName, std::max(tabletW, tabletH), std::min(tabletW, tabletH), std::min<uint32_t>(targetFps, tabletFps));
         setOrientation(output->deviceName, tabletH > tabletW);
+        if (displayMode == proto::kDisplayTabletOnly) useOnlyDisplay(output->deviceName);
         // La rotation change les coordonnées de l'écran : on relit la description.
         outputs = enumerateOutputs();
         output = pickOutput(outputs, wanted);
@@ -422,7 +500,7 @@ bool runSession(const Options& opt, const std::string& host) {
     EncoderConfig cfg;
     cfg.width = width;
     cfg.height = height;
-    cfg.fps = std::min<uint32_t>(opt.fps, tabletFps ? tabletFps : opt.fps);
+    cfg.fps = std::min<uint32_t>(targetFps, tabletFps ? tabletFps : targetFps);
     cfg.bitrate = opt.bitrateMbps * 1'000'000;
     cfg.hevc = opt.hevc && (codecs & 2);
 
@@ -454,6 +532,12 @@ bool runSession(const Options& opt, const std::string& host) {
     PenInjector pen;
     pen.setTarget(output->desktop);
     pen.setEnabled(opt.injectTouch);
+
+    {
+        proto::Writer w(proto::kControlState);
+        w.u8(displayMode).u8(static_cast<uint8_t>(targetFps));
+        if (!ch.send(w.data())) return true;
+    }
 
     trayClearAlert();
     SessionStats stats;
@@ -492,6 +576,8 @@ bool runSession(const Options& opt, const std::string& host) {
     bool audioRunning = false, audioStateSent = false;
 
     while (alive && !gStop) {
+        // Nouveau mode ou nouvelle fréquence : la session suivante repart sur le bon écran.
+        if (gRestartSession.exchange(false)) break;
         const bool audioWanted = gAudioOnTablet;
         if (audioWanted != audioRunning || !audioStateSent) {
             if (audioWanted && !audioRunning) {
@@ -689,7 +775,12 @@ void serviceLoop(Options opt) {
     int backoffMs = 500;
     while (!gStop) {
         setStatus(L"Recherche de la tablette");
-        if (std::chrono::steady_clock::now() - gLastSessionEnd > kMonitorGrace) gMonitor.release();
+        if (std::chrono::steady_clock::now() - gLastSessionEnd > kMonitorGrace) {
+            // Jamais d'écran du PC éteint sans tablette connectée.
+            restoreDisplays();
+            gDisplayMode = proto::kDisplayExtended;
+            gMonitor.release();
+        }
         const std::string host = resolveHost(opt);
         if (host.empty()) {
             std::printf("Tablette introuvable.\n");
@@ -730,12 +821,40 @@ Options parseArgs(int argc, wchar_t** argv) {
         else if (a == L"--duration") o.durationSec = std::stoi(next());
         else if (a == L"--list") o.listOnly = true;
         else if (a == L"--stop") o.stopOthers = true;
+        else if (a == L"--open") o.open = true;
     }
     return o;
 }
 
 // Nom lié à la session : chaque agent surveille cet événement, signalé par --stop.
 constexpr wchar_t kQuitEvent[] = L"Global\\ScreenlinkQuit";
+constexpr wchar_t kInstanceMutex[] = L"Global\\ScreenlinkAgent";
+
+bool agentRunning() {
+    HANDLE instance = OpenMutexW(SYNCHRONIZE, FALSE, kInstanceMutex);
+    const DWORD error = GetLastError();
+    if (instance) CloseHandle(instance);
+    return instance != nullptr || error == ERROR_ACCESS_DENIED;
+}
+
+// Raccourci du menu Démarrer : relance le service s'il est arrêté, puis indique quoi faire.
+int openFromShortcut() {
+    if (!agentRunning()) {
+        SC_HANDLE manager = OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT);
+        SC_HANDLE service = manager ? OpenServiceW(manager, L"36Screenlink", SERVICE_START) : nullptr;
+        if (service) {
+            StartServiceW(service, 0, nullptr);
+            CloseServiceHandle(service);
+        }
+        if (manager) CloseServiceHandle(manager);
+        for (int i = 0; i < 30 && !agentRunning(); ++i) Sleep(200);
+    }
+    MessageBoxW(nullptr,
+                agentRunning() ? L"36Screenlink est actif.\n\nOuvrez l'application sur la tablette : l'écran apparaît tout seul.\n\nSur la tablette, glissez depuis le bord gauche pour ouvrir le menu."
+                               : L"36Screenlink n'a pas pu démarrer. Réinstallez l'application.",
+                L"36Screenlink", MB_ICONINFORMATION | MB_SETFOREGROUND);
+    return 0;
+}
 
 } // namespace
 
@@ -760,6 +879,8 @@ int wmain(int argc, wchar_t** argv) {
     }
 
 
+    if (opt.open) return openFromShortcut();
+
     if (opt.stopOthers) {
         HANDLE quit = OpenEventW(EVENT_MODIFY_STATE, FALSE, kQuitEvent);
         if (quit) SetEvent(quit);
@@ -768,7 +889,7 @@ int wmain(int argc, wchar_t** argv) {
 
     // Une seule instance sur la machine, service compris : deux agents se disputeraient la tablette.
     SetLastError(ERROR_SUCCESS);
-    HANDLE instance = CreateMutexW(nullptr, FALSE, L"Global\\ScreenlinkAgent");
+    HANDLE instance = CreateMutexW(nullptr, FALSE, kInstanceMutex);
     const DWORD instanceError = GetLastError();
     if (instanceError == ERROR_ALREADY_EXISTS || instanceError == ERROR_ACCESS_DENIED) {
         std::printf("36Screenlink tourne déjà.\n");
@@ -779,6 +900,7 @@ int wmain(int argc, wchar_t** argv) {
     }
 
     gSystemMode = opt.system;
+    gFps = opt.fps;
 
     HANDLE quitEvent = CreateEventW(nullptr, TRUE, FALSE, kQuitEvent);
     std::thread quitWatcher([quitEvent] {
@@ -811,6 +933,7 @@ int wmain(int argc, wchar_t** argv) {
         if (opt.virtualMonitor && opt.outputIndex < 0) gMonitor.start();
         serviceLoop(opt);
     }
+    restoreDisplays();
     SetEvent(quitEvent);
     quitWatcher.join();
     WSACleanup();

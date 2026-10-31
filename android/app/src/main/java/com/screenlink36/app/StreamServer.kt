@@ -35,6 +35,8 @@ class StreamServer(
         /** Montre le code et bloque jusqu'à la réponse de l'utilisateur. */
         fun confirmPairing(code: Int): Boolean
         fun onAudioRoute(onTablet: Boolean)
+        fun onControlState(displayMode: Int, fps: Int)
+        fun onStats(fps: Int, latencyMs: Int)
     }
 
     private val pairing = PairingStore(File(context.noBackupFilesDir, "pairing.v2"))
@@ -108,6 +110,14 @@ class StreamServer(
 
     fun armPairing() {
         pairingArmed = true
+    }
+
+    fun sendControl(id: Int, value: Int) {
+        sendInput(byteArrayOf(Protocol.MSG_CONTROL.toByte(), id.toByte(), value.toByte()))
+    }
+
+    fun disconnect() {
+        client?.let { socket -> touchSender.execute { runCatching { socket.close() } } }
     }
 
     fun requestAudioRoute(onTablet: Boolean) {
@@ -225,6 +235,11 @@ class StreamServer(
                 val rate = b.int
                 audio.write(msg, b.position(), b.remaining(), rate)
             }
+            Protocol.MSG_CONTROL_STATE -> {
+                val mode = b.get().toInt()
+                val fps = b.get().toInt() and 0xFF
+                ui.onControlState(mode, fps)
+            }
             Protocol.MSG_AUDIO_STATE -> {
                 val onTablet = b.get().toInt() != 0
                 if (!onTablet) audio.stop()
@@ -261,6 +276,7 @@ class StreamServer(
 
     private fun sendStats(s: VideoDecoder.Stats) {
         Log.i(TAG, "stats $s")
+        ui.onStats(s.frames, s.avgLatUs / 1000)
         send(ByteBuffer.allocate(21).put(Protocol.MSG_STATS.toByte()).putInt(s.frames).putInt(s.avgLatUs)
             .putInt(s.p95LatUs).putInt(s.avgDecUs).putInt(s.drops).array())
     }

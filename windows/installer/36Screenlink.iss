@@ -1,6 +1,6 @@
 ﻿; Installateur de 36Screenlink : un seul fichier, une seule validation administrateur.
 #ifndef Version
-  #define Version "1.1.0"
+  #define Version "1.2.0"
 #endif
 #define Root "..\.."
 #define PlatformToolsUrl "https://dl.google.com/android/repository/platform-tools_r37.0.1-win.zip"
@@ -26,6 +26,7 @@ SolidCompression=yes
 WizardStyle=modern
 UninstallDisplayName=36Screenlink
 UninstallDisplayIcon={app}\36Screenlink.exe
+SetupIconFile=..\agent\res\36Screenlink.ico
 LicenseFile={#Root}\LICENSE
 CloseApplications=no
 
@@ -48,6 +49,12 @@ Source: "remove.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Root}\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Root}\THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Root}\windows\driver\LICENSE-MS-PL.txt"; DestDir: "{app}"; Flags: ignoreversion
+
+[Icons]
+Name: "{autoprograms}\36Screenlink"; Filename: "{app}\36Screenlink.exe"; Parameters: "--open"; Comment: "Partager l'écran vers la tablette"
+
+[Run]
+Filename: "{app}\36Screenlink.exe"; Parameters: "--open"; Description: "Lancer 36Screenlink"; Flags: postinstall nowait skipifsilent runasoriginaluser
 
 [UninstallRun]
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\remove.ps1"""; Flags: runhidden waituntilterminated; RunOnceId: "Remove36Screenlink"

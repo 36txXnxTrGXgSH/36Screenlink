@@ -81,6 +81,11 @@ try {
             -BinaryPathName "`"$app\36ScreenlinkService.exe`"" -Description 'Écran étendu sur tablette Android' | Out-Null
     }
     & sc.exe failure $serviceName reset= 86400 actions= restart/5000/restart/5000/restart/30000 | Out-Null
+    # L'utilisateur connecté peut démarrer le service depuis le menu Démarrer, sans droits admin.
+    $descriptor = (& sc.exe sdshow $serviceName | Where-Object { $_.Trim() }) -join ''
+    if ($descriptor -notmatch '\(A;;RPLC;;;IU\)' -and $descriptor -match '^(D:.*?)(S:.*)?$') {
+        & sc.exe sdset $serviceName ($Matches[1] + '(A;;RPLC;;;IU)' + $Matches[2]) | Out-Null
+    }
     Start-Service $serviceName
     Stop-Transcript | Out-Null
 }
