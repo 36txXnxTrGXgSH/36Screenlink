@@ -1,6 +1,6 @@
 ﻿# Construit tout ce qui se publie : dist\release\36Screenlink-Setup.exe et 36Screenlink.apk.
 # Aucune donnée locale ne peut y entrer : l'installateur ne prend que les fichiers qu'il liste.
-param([string]$Version = '1.2.0')
+param([string]$Version = '1.3.0')
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot
 $out = Join-Path $root 'dist\release'
@@ -29,4 +29,27 @@ Copy-Item $apk "$out\36Screenlink.apk" -Force
 
 & $iscc /Q "/DVersion=$Version" "$root\windows\installer\36Screenlink.iss"
 if ($LASTEXITCODE) { throw 'Inno Setup' }
-Get-ChildItem $out -File -Include *.exe, *.apk -Recurse -Depth 0 | Select-Object Name, Length
+
+# Version portable : liste blanche, aucune donnée locale ne peut y entrer.
+$stage = Join-Path $out '36Screenlink-Portable'
+Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force "$stage\driver" | Out-Null
+$files = @{
+    'windows\build\Release\36Screenlink.exe'        = $stage
+    'windows\driver\build\36ScreenlinkDevice.exe'   = $stage
+    'windows\driver\dist\36ScreenlinkDriver.dll'    = "$stage\driver"
+    'windows\driver\dist\36ScreenlinkDriver.inf'    = "$stage\driver"
+    'windows\driver\dist\36ScreenlinkDriver.cat'    = "$stage\driver"
+    'windows\installer\driver.ps1'                  = $stage
+    'windows\installer\LISEZ-MOI-portable.txt'      = $stage
+    'windows\driver\LICENSE-MS-PL.txt'              = $stage
+    'THIRD_PARTY_NOTICES.md'                        = $stage
+    'LICENSE'                                       = $stage
+}
+foreach ($source in $files.Keys) { Copy-Item (Join-Path $root $source) $files[$source] }
+Set-Content "$stage\portable.txt" 'Ce fichier garde les donnees dans le dossier data, a cote de l exe.' -Encoding ascii
+$zip = Join-Path $out '36Screenlink-Portable.zip'
+Remove-Item $zip -ErrorAction SilentlyContinue
+Compress-Archive -Path $stage -DestinationPath $zip
+Remove-Item $stage -Recurse -Force
+Get-Item "$out\36Screenlink-Setup.exe", "$out\36Screenlink.apk", $zip | Select-Object Name, Length

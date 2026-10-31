@@ -8,7 +8,7 @@
 class VirtualMonitor {
 public:
     ~VirtualMonitor();
-    // Sans effet si un écran secondaire existe déjà (dummy plug, autre instance).
+    // Sans effet si notre moniteur virtuel existe déjà.
     void start();
     // Demande le moniteur et attend qu'il apparaisse dans DXGI.
     void raise();

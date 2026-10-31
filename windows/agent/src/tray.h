@@ -11,6 +11,8 @@ struct TrayConfig {
     // Lancé par le service sous SYSTEM : ni « Quitter », que le service annulerait, ni
     // ouverture du journal, qui lancerait un éditeur avec les droits SYSTEM.
     bool managedByService = false;
+    // Version portable uniquement : dossier du script qui retire le pilote du PC.
+    std::wstring portableDirectory;
 };
 
 // Boucle de message de l'icône de notification. Bloque jusqu'à « Quitter ».

@@ -18,6 +18,7 @@ struct OutputInfo {
     UINT vendorId = 0;
     RECT desktop{};
     bool primary = false;
+    bool isVirtual = false; // moniteur créé par notre pilote
 };
 
 std::vector<OutputInfo> enumerateOutputs();

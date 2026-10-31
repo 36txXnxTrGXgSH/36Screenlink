@@ -13,6 +13,7 @@ constexpr UINT kCmdQuit = 1;
 constexpr UINT kCmdLog = 2;
 constexpr UINT kCmdAudioPc = 3;
 constexpr UINT kCmdAudioTablet = 4;
+constexpr UINT kCmdRemoveDriver = 5;
 
 TrayConfig gConfig;
 NOTIFYICONDATAW gIcon{};
@@ -27,6 +28,17 @@ void ensureIcon() {
     if (gIconAdded) return;
     gIcon.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     gIconAdded = Shell_NotifyIconW(NIM_ADD, &gIcon) != FALSE;
+}
+
+// Retire le pilote : l'assistant s'arrête avec l'agent, donc le script attend sa fin.
+void removeDriverAndQuit(HWND hwnd) {
+    const int answer = MessageBoxW(hwnd, L"Retirer le pilote de ce PC et quitter 36Screenlink ?\n\nIl sera réinstallé au prochain lancement.",
+                                   L"36Screenlink", MB_YESNO | MB_ICONQUESTION | MB_SETFOREGROUND);
+    if (answer != IDYES) return;
+    const std::wstring args = L"-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command \"Start-Sleep 3; & '" +
+                              gConfig.portableDirectory + L"\\driver.ps1' -Action Remove\"";
+    ShellExecuteW(nullptr, L"runas", L"powershell.exe", args.c_str(), nullptr, SW_HIDE);
+    DestroyWindow(hwnd);
 }
 
 void refreshTip() {
@@ -49,6 +61,7 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (!gConfig.managedByService) {
                 AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
                 AppendMenuW(menu, MF_STRING, kCmdLog, L"Ouvrir le journal");
+                if (!gConfig.portableDirectory.empty()) AppendMenuW(menu, MF_STRING, kCmdRemoveDriver, L"Retirer le pilote et quitter");
                 AppendMenuW(menu, MF_STRING, kCmdQuit, L"Quitter");
             }
             POINT p;
@@ -58,6 +71,7 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             DestroyMenu(menu);
             if (cmd == kCmdQuit) DestroyWindow(hwnd);
             if (cmd == kCmdLog) ShellExecuteW(nullptr, L"open", gConfig.logPath.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+            if (cmd == kCmdRemoveDriver) removeDriverAndQuit(hwnd);
             if (cmd == kCmdAudioPc) gConfig.setAudioOnTablet(false);
             if (cmd == kCmdAudioTablet) gConfig.setAudioOnTablet(true);
         }

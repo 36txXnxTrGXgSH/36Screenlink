@@ -143,10 +143,10 @@ int primaryIndex(const std::vector<OutputInfo>& outputs) {
 const OutputInfo* pickOutput(const std::vector<OutputInfo>& outputs, int index) {
     if (outputs.empty()) return nullptr;
     if (index >= 0) return index < static_cast<int>(outputs.size()) ? &outputs[index] : nullptr;
-    // Par défaut, un écran secondaire (dummy plug ou IDD), sinon miroir du principal.
+    // Jamais un second écran physique du PC : notre moniteur, sinon miroir de l'écran principal.
     for (const auto& o : outputs)
-        if (!o.primary) return &o;
-    return &outputs[0];
+        if (o.isVirtual) return &o;
+    return &outputs[primaryIndex(outputs)];
 }
 
 // Choisit le mode du moniteur virtuel le plus proche de la tablette : d'abord sa résolution
@@ -457,7 +457,7 @@ bool runSession(const Options& opt, const std::string& host) {
         std::printf("Aucun écran à capturer.\n");
         return false;
     }
-    if (!mirrorPrimary && (!output->primary || gSavedDisplays)) {
+    if (!mirrorPrimary && output->isVirtual) {
         setBestMode(output->deviceName, std::max(tabletW, tabletH), std::min(tabletW, tabletH), std::min<uint32_t>(targetFps, tabletFps));
         setOrientation(output->deviceName, tabletH > tabletW);
         if (displayMode == proto::kDisplayTabletOnly) useOnlyDisplay(output->deviceName);
@@ -869,7 +869,17 @@ int wmain(int argc, wchar_t** argv) {
     WSADATA wsa;
     WSAStartup(MAKEWORD(2, 2), &wsa);
 
-    const Options opt = parseArgs(argc, argv);
+    Options opt = parseArgs(argc, argv);
+    const bool portable = std::filesystem::exists(std::filesystem::path(exeDirectory()) / L"portable.txt");
+    // Double-clic sur l'exe : la version portable démarre, la version installée informe.
+    if (argc == 1) {
+        if (portable) {
+            opt.autoLink = true;
+            opt.tray = true;
+        } else {
+            opt.open = true;
+        }
+    }
     if (opt.listOnly) {
         int i = 0;
         for (const auto& o : enumerateOutputs())
@@ -927,6 +937,7 @@ int wmain(int argc, wchar_t** argv) {
         tray.setAudioOnTablet = [](bool onTablet) { gAudioOnTablet = onTablet; saveAudioOnTablet(onTablet); };
         tray.logPath = logPath;
         tray.managedByService = opt.system;
+        tray.portableDirectory = portable && !opt.system ? exeDirectory() : L"";
         runTray(tray);
         worker.join();
     } else {

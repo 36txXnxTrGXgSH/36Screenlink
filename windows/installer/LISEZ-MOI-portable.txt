@@ -1,0 +1,23 @@
+36Screenlink, version portable
+
+1. Decompressez ce dossier ou vous voulez, par exemple sur une cle USB.
+2. Installez 36Screenlink.apk sur la tablette et ouvrez l'application.
+3. Lancez 36Screenlink.exe et acceptez l'invite administrateur.
+4. Comparez le code a 6 chiffres sur le PC et la tablette, puis confirmez.
+
+Le premier lancement installe le pilote d'ecran. Une invite administrateur
+s'affiche ensuite a chaque lancement, pour creer le moniteur.
+
+Pour quitter : clic droit sur l'icone pres de l'horloge, puis Quitter.
+Pour ne rien laisser sur le PC : Retirer le pilote et quitter.
+
+Le PC et la tablette doivent etre sur le meme reseau Wi-Fi. Si la tablette
+est deja appairee, touchez Nouvel appairage dans l'application.
+
+Pour l'USB : ajoutez adb.exe, AdbWinApi.dll et AdbWinUsbApi.dll d'Android
+Platform Tools dans ce dossier, et activez le debogage USB sur la tablette.
+
+N'utilisez pas cette version sur un PC ou 36Screenlink est deja installe.
+Sans droits administrateur, l'ecran etendu est impossible.
+
+GPU NVIDIA obligatoire. Les donnees restent dans le sous-dossier data.

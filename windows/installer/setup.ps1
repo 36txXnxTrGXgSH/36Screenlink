@@ -24,44 +24,7 @@ try {
         Start-Sleep 2
     }
 
-    # Pilote : un certificat propre à ce PC signe le paquet, puis sa clé privée est détruite.
-    # Personne ne peut ensuite signer autre chose avec ce certificat.
-    $subject = 'CN=36Screenlink (local)'
-    foreach ($store in 'Root', 'TrustedPublisher') {
-        Get-ChildItem "Cert:\LocalMachine\$store" | Where-Object Subject -eq $subject | Remove-Item
-    }
-    $enumerated = pnputil /enum-drivers | Out-String
-    foreach ($block in ($enumerated -split "(\r?\n){2,}")) {
-        if ($block -match '(?i)36screenlinkdriver\.inf' -and $block -match '(oem\d+\.inf)') {
-            pnputil /delete-driver $Matches[1] /uninstall /force | Out-Null
-        }
-    }
-
-    $stage = Join-Path $data 'driver-stage'
-    Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
-    New-Item -ItemType Directory $stage | Out-Null
-    Copy-Item "$app\driver\*" $stage
-
-    $cert = New-SelfSignedCertificate -Subject $subject -Type CodeSigningCert -KeyAlgorithm RSA -KeyLength 3072 -HashAlgorithm SHA256 `
-        -CertStoreLocation Cert:\LocalMachine\My -NotAfter (Get-Date).AddYears(20) -KeyExportPolicy NonExportable
-    try {
-        $public = Join-Path $stage 'local.cer'
-        Export-Certificate -Cert $cert -FilePath $public | Out-Null
-        Import-Certificate -FilePath $public -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
-        Import-Certificate -FilePath $public -CertStoreLocation Cert:\LocalMachine\TrustedPublisher | Out-Null
-        foreach ($file in '36ScreenlinkDriver.dll', '36ScreenlinkDriver.cat') {
-            $signature = Set-AuthenticodeSignature -Certificate $cert -FilePath (Join-Path $stage $file) -HashAlgorithm SHA256
-            if ($signature.Status -ne 'Valid') { throw "Signature de $file : $($signature.Status)" }
-        }
-    }
-    finally {
-        # La clé privée ne survit jamais à ce script, même en cas d'erreur.
-        Remove-Item "Cert:\LocalMachine\My\$($cert.Thumbprint)" -DeleteKey
-    }
-
-    pnputil /add-driver (Join-Path $stage '36ScreenlinkDriver.inf') /install
-    if ($LASTEXITCODE -notin 0, 259, 3010) { throw "pnputil a échoué : $LASTEXITCODE" }
-    Remove-Item $stage -Recurse -Force
+    & "$app\driver.ps1" -Action Install -Force
 
     if ($PlatformTools -and (Test-Path $PlatformTools)) {
         $unpacked = Join-Path $data 'platform-tools-stage'

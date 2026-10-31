@@ -11,9 +11,9 @@
 
 namespace {
 
-bool hasSecondaryOutput() {
+bool hasVirtualOutput() {
     for (const auto& o : enumerateOutputs())
-        if (!o.primary) return true;
+        if (o.isVirtual) return true;
     return false;
 }
 
@@ -26,7 +26,7 @@ VirtualMonitor::~VirtualMonitor() {
 }
 
 void VirtualMonitor::start() {
-    if (hasSecondaryOutput()) return;
+    if (hasVirtualOutput()) return;
 
     const std::filesystem::path exe = std::filesystem::path(exeDirectory()) / L"36ScreenlinkDevice.exe";
     if (!std::filesystem::exists(exe)) {
@@ -72,8 +72,8 @@ void VirtualMonitor::raise() {
     if (!managed_ || raised_) return;
     SetEvent(raiseEvent_);
     raised_ = true;
-    for (int i = 0; i < 100 && !hasSecondaryOutput(); ++i) Sleep(100);
-    if (!hasSecondaryOutput()) {
+    for (int i = 0; i < 100 && !hasVirtualOutput(); ++i) Sleep(100);
+    if (!hasVirtualOutput()) {
         std::printf("Le moniteur virtuel n'est pas apparu : pilote installé ?\n");
         trayAlert(L"Le moniteur virtuel n'est pas apparu. Vérifiez que le pilote est installé.");
     }

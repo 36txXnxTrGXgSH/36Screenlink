@@ -1,6 +1,7 @@
 #include "capture.h"
 
 #include <cstring>
+#include <cwchar>
 #include <utility>
 
 std::vector<OutputInfo> enumerateOutputs() {
@@ -26,6 +27,10 @@ std::vector<OutputInfo> enumerateOutputs() {
             info.vendorId = desc.VendorId;
             info.desktop = outDesc.DesktopCoordinates;
             info.primary = outDesc.DesktopCoordinates.left == 0 && outDesc.DesktopCoordinates.top == 0;
+            DISPLAY_DEVICEW monitor{};
+            monitor.cb = sizeof(monitor);
+            // Identifiant EDID fixé par le pilote : fabricant SXT, produit 0136.
+            info.isVirtual = EnumDisplayDevicesW(outDesc.DeviceName, 0, &monitor, 0) && wcsstr(monitor.DeviceID, L"SXT0136");
             result.push_back(std::move(info));
         }
     }
