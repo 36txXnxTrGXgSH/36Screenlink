@@ -392,15 +392,22 @@ void tryPairing(SecureChannel& ch) {
     if (lastFailure.time_since_epoch().count() != 0 && now - lastFailure < kPairingRetry) return;
     setStatus(L"Appairage en cours");
     Key256 psk{};
-    if (ch.pair(psk, askPairingCode) && savePsk(psk)) {
+    bool asked = false;
+    const auto confirm = [&asked](uint32_t code) {
+        asked = true;
+        return askPairingCode(code);
+    };
+    if (ch.pair(psk, confirm) && savePsk(psk)) {
         SecureZeroMemory(psk.data(), psk.size());
         std::printf("Appairage réussi.\n");
         trayClearAlert();
         return;
     }
-    lastFailure = std::chrono::steady_clock::now();
     std::printf("Appairage annulé : %s\n", ch.lastError().c_str());
-    trayAlert(L"Appairage impossible. Sur la tablette, ouvrez l'application et touchez Nouvel appairage.");
+    // Tablette pas encore prête : aucune fenêtre affichée, on réessaie sans attendre. Le délai
+    // ne sert qu'à ne pas redemander à l'utilisateur ce qu'il vient de refuser.
+    if (asked) lastFailure = std::chrono::steady_clock::now();
+    trayAlert(L"Sur la tablette, ouvrez l'application et touchez Nouvel appairage.");
 }
 
 // Une session complète. Renvoie false pour arrêter, true pour tenter une reconnexion.

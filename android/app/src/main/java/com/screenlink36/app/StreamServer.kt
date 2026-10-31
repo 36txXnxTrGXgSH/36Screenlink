@@ -44,8 +44,6 @@ class StreamServer(
     private val touchSender = Executors.newSingleThreadExecutor()
     private val audio = AudioPlayer()
     @Volatile private var running = false
-    // Une tablette déjà appairée n'accepte un nouveau PC qu'à la demande de l'utilisateur.
-    @Volatile private var pairingArmed = false
     private var serverSocket: ServerSocket? = null
     private var acceptThread: Thread? = null
     @Volatile private var client: Socket? = null
@@ -302,6 +300,9 @@ class StreamServer(
     }
 
     companion object {
+        // Une tablette déjà appairée n'accepte un nouveau PC qu'à la demande de l'utilisateur.
+        // Hors de l'instance : l'autorisation survit à une recréation de l'écran.
+        @Volatile private var pairingArmed = false
         private const val TAG = "S36X"
         private const val READ_TIMEOUT_MS = 6000
         private const val HANDSHAKE_TIMEOUT_MS = 3000
