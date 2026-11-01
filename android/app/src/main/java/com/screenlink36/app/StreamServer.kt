@@ -36,6 +36,7 @@ class StreamServer(
         fun confirmPairing(code: Int): Boolean
         fun onAudioRoute(onTablet: Boolean)
         fun onControlState(displayMode: Int, fps: Int)
+        fun onLink(usb: Boolean)
         fun onStats(fps: Int, latencyMs: Int)
     }
 
@@ -133,6 +134,8 @@ class StreamServer(
 
     private fun handle(socket: Socket) {
         client = socket
+        // En USB, le PC arrive par le tunnel d'adb, donc depuis la tablette elle-même.
+        ui.onLink(socket.inetAddress.isLoopbackAddress)
         socket.tcpNoDelay = true
         // Délai court avant authentification : un inconnu du réseau ne bloque pas longtemps l'attente.
         socket.soTimeout = HANDSHAKE_TIMEOUT_MS

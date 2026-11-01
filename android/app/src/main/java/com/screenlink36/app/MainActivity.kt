@@ -85,7 +85,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamServer.Ui {
         softTarget = SoftKeyboardTarget(this) { server?.sendInput(it) }
         root.addView(softTarget, FrameLayout.LayoutParams(1, 1))
         val buttonSize = (56 * resources.displayMetrics.density).toInt()
-        menu = SideMenu(this, menuActions)
+        menu = SideMenu(this, video, menuActions)
         refreshMenu()
         root.addView(menu.view, FrameLayout.LayoutParams(MATCH, MATCH))
         pairButton = Button(this).apply {
@@ -259,6 +259,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamServer.Ui {
     override fun onAudioRoute(onTablet: Boolean) = runOnUiThread {
         audioOnTablet = onTablet
         refreshMenu()
+    }
+
+    override fun onLink(usb: Boolean) = runOnUiThread {
+        menu.updateLink(usb)
     }
 
     override fun onControlState(displayMode: Int, fps: Int) = runOnUiThread {

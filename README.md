@@ -33,7 +33,7 @@ Testé uniquement avec une RTX 3080 et une Lenovo Idea Tab Pro. AMD et Intel pas
 
 ## Utilisation
 
-Sur la tablette, **glissez depuis le bord gauche vers le centre** pour ouvrir le menu. Touchez à côté pour le refermer.
+Sur la tablette, **glissez depuis le bord gauche vers le centre** pour ouvrir le menu en verre dépoli. Touchez à côté ou la croix pour le refermer. L'épingle le garde ouvert : les touches à côté repartent alors vers Windows.
 
 | Réglage | Effet |
 |---|---|

@@ -7,6 +7,10 @@ Le pilote `36ScreenlinkDriver` dérive du sample IndirectDisplay de Microsoft
 Copyright (c) Microsoft Corporation, distribué sous Microsoft Public License (MS-PL).
 Le code source correspondant reste sous MS-PL. Le texte complet figure dans `windows/driver/LICENSE-MS-PL.txt`, et à côté de l'exécutable dans les versions publiées.
 
+## Icônes Material Symbols
+
+Les icônes du menu de l'application Android viennent de Material Symbols, Copyright Google LLC, distribuées sous Apache License 2.0 (https://www.apache.org/licenses/LICENSE-2.0).
+
 ## En-tête NVENC
 
 `nvEncodeAPI.h`, utilisé à la compilation de l'agent :

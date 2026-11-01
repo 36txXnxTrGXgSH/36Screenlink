@@ -1,5 +1,22 @@
 # Résultats de tests — 2026-10-31
 
+## Menu en verre dépoli 1.5
+
+Test sur la tablette de référence en USB, gestes simulés par adb. Cette tablette n'a pas le flou de fenêtre d'Android : le verre floute une copie réduite de l'image reçue, rafraîchie 10 fois par seconde.
+
+| Vérification | Résultat |
+|---|---|
+| Flou et lisibilité sur un fond d'écran clair | OK |
+| Rotation, Tactile | OK, états affichés |
+| Fréquence 60 puis 120 Hz | OK, session relancée au bon mode |
+| Dupliquer, retour Étendu | OK |
+| Sortie son PC puis Tablette | Boutons actifs ; son **non écouté** |
+| Touche Windows, Clavier | OK, menu Démarrer ouvert, clavier affiché |
+| Lisibilité sur un fond sombre | OK |
+| Toucher à côté, croix | OK, menu refermé |
+| Épingle | OK, menu conservé |
+| Icône Wi-Fi, Déconnecter, Bureau, portrait, Android 11 | **Non testés** |
+
 ## Fenêtres amenées sur la tablette 1.4.1
 
 Test sur le service installé, touches simulées par adb sur l'icône de Bloc-notes dans la barre des tâches de la tablette.
