@@ -19,7 +19,7 @@ class VideoDecoder(private val surface: Surface, private val onStats: (Stats) ->
     @Volatile private var running = false
     private var codec: MediaCodec? = null
     private var outputThread: Thread? = null
-    private var waitingForKey = false
+    @Volatile private var waitingForKey = false
     private val queuedAt = ConcurrentHashMap<Long, Long>()
     private val latencies = IntArray(1024)
     private var latencyCount = 0
@@ -31,7 +31,9 @@ class VideoDecoder(private val surface: Surface, private val onStats: (Stats) ->
         val format = MediaFormat.createVideoFormat(mime, width, height).apply {
             setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
             setInteger(MediaFormat.KEY_PRIORITY, 0)
-            setInteger(MediaFormat.KEY_OPERATING_RATE, fps * 2)
+            // Décodage le plus rapide possible quelle que soit la cadence : avec fps × 2, le décodeur
+            // se calait sur 60 Hz et doublait la latence (21 ms contre 11 ms mesurés).
+            setInteger(MediaFormat.KEY_OPERATING_RATE, Short.MAX_VALUE.toInt())
             setInteger(MediaFormat.KEY_ROTATION, rotation)
             setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
         }
@@ -69,6 +71,7 @@ class VideoDecoder(private val surface: Surface, private val onStats: (Stats) ->
         }
         if (index < 0) {
             // File du décodeur pleine : le flux P est rompu, il faut une image clé.
+            Log.i(TAG, "Aucun tampon libre dans le décodeur : attente d'une image clé")
             synchronized(latencies) { drops++ }
             waitingForKey = true
             requestIdr()
@@ -81,6 +84,13 @@ class VideoDecoder(private val surface: Surface, private val onStats: (Stats) ->
         val bufferFlags = if (isConfig) MediaCodec.BUFFER_FLAG_CODEC_CONFIG else if (isKey) MediaCodec.BUFFER_FLAG_KEY_FRAME else 0
         if (!isConfig) queuedAt[ptsUs] = nowUs()
         c.queueInputBuffer(index, 0, length, ptsUs, bufferFlags)
+    }
+
+    /** Images perdues avant le décodeur : on attend la prochaine image clé, demandée au PC. */
+    fun dropUntilKey() {
+        synchronized(latencies) { drops++ }
+        if (!waitingForKey) requestIdr()
+        waitingForKey = true
     }
 
     private fun drain(c: MediaCodec) {
@@ -144,7 +154,11 @@ class VideoDecoder(private val surface: Surface, private val onStats: (Stats) ->
 
     fun stop() {
         running = false
-        outputThread?.join(500)
+        try {
+            outputThread?.join(500)
+        } catch (_: InterruptedException) {
+            // Arrêt de l'application : la sortie s'arrête d'elle-même, running étant faux.
+        }
         outputThread = null
         codec?.let {
             try {

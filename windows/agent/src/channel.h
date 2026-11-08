@@ -25,11 +25,12 @@ public:
     bool receive(std::vector<uint8_t>& plain);
     void shutdown();
     const std::string& lastError() const { return error_; }
+    // Dernier statut lu dans la réponse de la tablette, -1 si elle n'a rien répondu.
+    int lastStatus() const { return status_; }
 
 private:
     bool writeAll(const void* p, size_t n);
     bool readAll(void* p, size_t n);
-    bool exchangeHello(uint8_t nonceS[16], uint8_t mac[32], uint8_t nonceC[16]);
     bool readStatus();
 
     SOCKET sock_ = INVALID_SOCKET;
@@ -38,4 +39,5 @@ private:
     std::mutex txMutex_;
     std::vector<uint8_t> txBuf_, rxBuf_;
     std::string error_;
+    int status_ = -1;
 };

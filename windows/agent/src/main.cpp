@@ -3,11 +3,14 @@
 #include <windows.h>
 #include <shellscalingapi.h>
 #include <timeapi.h>
+#include <fcntl.h>
+#include <io.h>
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <ctime>
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -23,6 +26,7 @@
 #include "encoder_mf.h"
 #include "encoder_nvenc.h"
 #include "input.h"
+#include "logw.h"
 #include "monitor.h"
 #include "protocol.h"
 #include "store.h"
@@ -101,7 +105,22 @@ std::wstring findAdb(const Options& opt) {
     const std::filesystem::path local = std::filesystem::path(exeDirectory()) / L"adb.exe";
     // Un agent SYSTEM ne doit jamais exécuter un adb trouvé dans un dossier modifiable.
     if (std::filesystem::exists(local) || gSystemMode) return local.wstring();
-    return L"adb.exe";
+    // Jamais un nom nu : CreateProcess chercherait d'abord dans le dossier courant. On ne
+    // retient qu'un chemin absolu trouvé dans le PATH.
+    std::wstring list(32767, L'\0');
+    const DWORD n = GetEnvironmentVariableW(L"PATH", list.data(), static_cast<DWORD>(list.size()));
+    list.resize(n < list.size() ? n : 0);
+    size_t start = 0;
+    while (start < list.size()) {
+        const size_t end = std::min(list.find(L';', start), list.size());
+        std::wstring dir = list.substr(start, end - start);
+        dir.erase(std::remove(dir.begin(), dir.end(), L'"'), dir.end());
+        std::error_code ec;
+        const std::filesystem::path candidate = std::filesystem::path(dir) / L"adb.exe";
+        if (!dir.empty() && candidate.is_absolute() && std::filesystem::is_regular_file(candidate, ec)) return candidate.wstring();
+        start = end + 1;
+    }
+    return local.wstring();
 }
 
 // Exécute adb sans fenêtre et renvoie sa sortie standard.
@@ -154,9 +173,30 @@ const OutputInfo* pickOutput(const std::vector<OutputInfo>& outputs, int index) 
     return &outputs[primaryIndex(outputs)];
 }
 
+// Fréquence réellement appliquée, lue dans la configuration d'affichage : après un retour de
+// « Tablette seule », EnumDisplaySettings peut annoncer une fréquence qui n'est plus la bonne.
+uint32_t actualRefreshHz(const std::wstring& device) {
+    UINT32 pathCount = 0, modeCount = 0;
+    if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &pathCount, &modeCount) != ERROR_SUCCESS) return 0;
+    std::vector<DISPLAYCONFIG_PATH_INFO> paths(pathCount);
+    std::vector<DISPLAYCONFIG_MODE_INFO> modes(modeCount);
+    if (QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &pathCount, paths.data(), &modeCount, modes.data(), nullptr) != ERROR_SUCCESS) return 0;
+    for (UINT32 i = 0; i < pathCount; ++i) {
+        DISPLAYCONFIG_SOURCE_DEVICE_NAME name{};
+        name.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+        name.header.size = sizeof(name);
+        name.header.adapterId = paths[i].sourceInfo.adapterId;
+        name.header.id = paths[i].sourceInfo.id;
+        if (DisplayConfigGetDeviceInfo(&name.header) != ERROR_SUCCESS || device != name.viewGdiDeviceName) continue;
+        const auto& r = paths[i].targetInfo.refreshRate;
+        return r.Denominator ? static_cast<uint32_t>(static_cast<double>(r.Numerator) / r.Denominator + 0.5) : 0;
+    }
+    return 0;
+}
+
 // Choisit le mode du moniteur virtuel le plus proche de la tablette : d'abord sa résolution
 // exacte, sinon la plus grande de même format qui tient dedans. Réglage non persistant.
-void setBestMode(const std::wstring& device, uint32_t longSide, uint32_t shortSide, uint32_t fps) {
+void setBestMode(const std::wstring& device, uint32_t longSide, uint32_t shortSide, uint32_t fps, bool force = false) {
     DEVMODEW best{};
     double bestScore = -1;
     DEVMODEW mode{};
@@ -174,12 +214,19 @@ void setBestMode(const std::wstring& device, uint32_t longSide, uint32_t shortSi
     DEVMODEW current{};
     current.dmSize = sizeof(current);
     if (bestScore < 0 || !EnumDisplaySettingsW(device.c_str(), ENUM_CURRENT_SETTINGS, &current)) return;
-    if (std::max(current.dmPelsWidth, current.dmPelsHeight) == std::max(best.dmPelsWidth, best.dmPelsHeight) &&
-        std::min(current.dmPelsWidth, current.dmPelsHeight) == std::min(best.dmPelsWidth, best.dmPelsHeight) &&
-        current.dmDisplayFrequency == best.dmDisplayFrequency)
-        return;
+    const uint32_t actual = actualRefreshHz(device);
+    const bool sameSize = std::max(current.dmPelsWidth, current.dmPelsHeight) == std::max(best.dmPelsWidth, best.dmPelsHeight) &&
+                          std::min(current.dmPelsWidth, current.dmPelsHeight) == std::min(best.dmPelsWidth, best.dmPelsHeight);
+    const bool rateOk = current.dmDisplayFrequency == best.dmDisplayFrequency &&
+                        (actual == 0 || std::abs(static_cast<int>(actual) - static_cast<int>(best.dmDisplayFrequency)) <= 1);
+    if (sameSize && rateOk && !force) return;
     best.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_DISPLAYFREQUENCY;
-    const LONG result = ChangeDisplaySettingsExW(device.c_str(), &best, nullptr, 0, nullptr);
+    // Même mode annoncé mais autre fréquence réelle : CDS_RESET force Windows à le réappliquer.
+    // Au retour de « Tablette seule », Windows reprend ensuite le mode de sa base d'affichage :
+    // on y inscrit donc celui du moniteur virtuel, qui n'appartient qu'à 36Screenlink.
+    DWORD flags = sameSize || force ? CDS_RESET : 0;
+    if (force) flags |= CDS_UPDATEREGISTRY;
+    const LONG result = ChangeDisplaySettingsExW(device.c_str(), &best, nullptr, flags, nullptr);
     std::printf("Mode de l'écran : %lux%lu à %lu Hz (résultat %ld)\n", best.dmPelsWidth, best.dmPelsHeight, best.dmDisplayFrequency, result);
     Sleep(500);
 }
@@ -227,8 +274,8 @@ bool useOnlyDisplay(const std::wstring& device) {
     return false;
 }
 
-void restoreDisplays() {
-    if (!gSavedDisplays) return;
+bool restoreDisplays() {
+    if (!gSavedDisplays) return false;
     auto& s = *gSavedDisplays;
     LONG result = SetDisplayConfig(static_cast<UINT32>(s.paths.size()), s.paths.data(), static_cast<UINT32>(s.modes.size()), s.modes.data(),
                                    SDC_APPLY | SDC_USE_SUPPLIED_DISPLAY_CONFIG | SDC_ALLOW_CHANGES);
@@ -237,6 +284,7 @@ void restoreDisplays() {
     std::printf("Écrans du PC rétablis : résultat %ld\n", result);
     gSavedDisplays.reset();
     Sleep(800);
+    return true;
 }
 
 // Fait pivoter l'écran capturé pour suivre la tablette. Réglage non persistant.
@@ -290,17 +338,27 @@ std::unique_ptr<Encoder> openEncoder(const Options& opt, UINT vendorId, ID3D11De
 struct SessionStats {
     std::atomic<uint32_t> tabletFrames{0}, tabletAvgLat{0}, tabletP95Lat{0}, tabletAvgDec{0}, tabletDrops{0};
     std::atomic<bool> requestIdr{false};
+    // UAC ou verrouillage montrés : aucune saisie avant la confirmation d'identité sur la tablette.
+    bool secureDesktop = false;
+    std::atomic<bool> armed{false};
     std::atomic<int64_t> lastPongUs{0};
 };
 
-void receiverLoop(SecureChannel& ch, TouchInjector& touch, KeyInjector& keys, PenInjector& pen, WindowFollower& follower, SessionStats& stats, std::atomic<bool>& alive) {
+void receiverLoop(SecureChannel& ch, TouchInjector& touch, KeyInjector& keys, PenInjector& pen, MouseInjector& mouse, WindowFollower& follower, SessionStats& stats, std::atomic<bool>& alive) {
     if (gSecureMode) attachInputDesktop();
     std::vector<uint8_t> msg;
     int64_t bestRtt = INT64_MAX;
     while (alive && ch.receive(msg)) {
         if (msg.empty()) continue;
         proto::Reader r(msg.data() + 1, msg.size() - 1);
+        const bool inputAllowed = !stats.secureDesktop || stats.armed;
         switch (msg[0]) {
+        case proto::kSecureArmed:
+            if (stats.secureDesktop && !stats.armed) {
+                stats.armed = true;
+                std::printf("Écran sécurisé : saisie autorisée après confirmation sur la tablette.\n");
+            }
+            break;
         case proto::kPong: {
             const uint64_t t0 = r.u64(), tablet = r.u64(), t1 = nowUs();
             const int64_t rtt = static_cast<int64_t>(t1 - t0);
@@ -336,16 +394,19 @@ void receiverLoop(SecureChannel& ch, TouchInjector& touch, KeyInjector& keys, Pe
                 c.y = r.u16();
                 contacts.push_back(c);
             }
+            if (!inputAllowed) break;
             touch.apply(contacts);
             follower.onContact(std::any_of(contacts.begin(), contacts.end(), [](const Contact& c) { return c.down; }));
             break;
         }
         case proto::kKey: {
+            if (!inputAllowed) break;
             const bool down = r.u8() != 0;
             keys.key(down, r.u16());
             break;
         }
         case proto::kPen: {
+            if (!inputAllowed) break;
             PenSample s{};
             s.state = r.u8();
             s.x = r.u16();
@@ -361,7 +422,7 @@ void receiverLoop(SecureChannel& ch, TouchInjector& touch, KeyInjector& keys, Pe
         case proto::kControl: {
             const uint8_t id = r.u8(), value = r.u8();
             if (id == proto::kControlDisplay && value <= proto::kDisplayTabletOnly) gDisplayMode = value;
-            if (id == proto::kControlFps && (value == 60 || value == 120)) gFps = value;
+            if (id == proto::kControlFps && (value == 60 || value == 120 || value == 144)) gFps = value;
             gRestartSession = true;
             break;
         }
@@ -371,7 +432,20 @@ void receiverLoop(SecureChannel& ch, TouchInjector& touch, KeyInjector& keys, Pe
             saveAudioOnTablet(onTablet);
             break;
         }
+        case proto::kMouse: {
+            if (!inputAllowed) break;
+            MouseSample m{};
+            m.buttons = r.u8();
+            m.x = r.u16();
+            m.y = r.u16();
+            m.wheelV = static_cast<int16_t>(r.u16());
+            m.wheelH = static_cast<int16_t>(r.u16());
+            mouse.apply(m);
+            follower.onContact(m.buttons != 0);
+            break;
+        }
         case proto::kText:
+            if (!inputAllowed) break;
             keys.text(std::string(reinterpret_cast<const char*>(msg.data() + 1), msg.size() - 1));
             break;
         default:
@@ -392,14 +466,17 @@ bool askPairingCode(uint32_t code) {
 
 // Échange ECDH : rien n'est enregistré sans confirmation du même code des deux côtés.
 void tryPairing(SecureChannel& ch) {
-    static std::chrono::steady_clock::time_point lastFailure{};
+    // Une fenêtre au plus par minute, quelle que soit la réponse : un faux serveur du réseau
+    // ne peut pas en faire surgir en rafale.
+    static std::chrono::steady_clock::time_point lastAsked{};
     const auto now = std::chrono::steady_clock::now();
-    if (lastFailure.time_since_epoch().count() != 0 && now - lastFailure < kPairingRetry) return;
+    if (lastAsked.time_since_epoch().count() != 0 && now - lastAsked < kPairingRetry) return;
     setStatus(L"Appairage en cours");
     Key256 psk{};
     bool asked = false;
     const auto confirm = [&asked](uint32_t code) {
         asked = true;
+        lastAsked = std::chrono::steady_clock::now();
         return askPairingCode(code);
     };
     if (ch.pair(psk, confirm) && savePsk(psk)) {
@@ -409,10 +486,9 @@ void tryPairing(SecureChannel& ch) {
         return;
     }
     std::printf("Appairage annulé : %s\n", ch.lastError().c_str());
-    // Tablette pas encore prête : aucune fenêtre affichée, on réessaie sans attendre. Le délai
-    // ne sert qu'à ne pas redemander à l'utilisateur ce qu'il vient de refuser.
-    if (asked) lastFailure = std::chrono::steady_clock::now();
-    trayAlert(L"Sur la tablette, ouvrez l'application et touchez Nouvel appairage.");
+    // Tablette déjà appairée à un autre PC : elle attend que l'utilisateur l'autorise.
+    if (!asked && ch.lastStatus() == proto::kStatusPairRefused)
+        trayAlert(L"Sur la tablette, ouvrez l'application et touchez Nouvel appairage.");
 }
 
 // Une session complète. Renvoie false pour arrêter, true pour tenter une reconnexion.
@@ -431,8 +507,24 @@ bool runSession(const Options& opt, const std::string& host) {
     if (!ch.handshake(*psk)) {
         // Tablette réinstallée ou autre appareil : la clé n'est jamais renvoyée, il faut un
         // nouvel appairage. La tablette le refuse tant que l'utilisateur ne l'a pas demandé.
+        // Application fermée en USB : le tunnel d'adb accepte puis ferme sans réponse. Il faut
+        // attendre l'application, pas proposer un appairage.
+        if (ch.lastStatus() < 0) {
+            static bool reported = false;
+            if (!reported) std::printf("Authentification : %s (application fermée ?)\n", ch.lastError().c_str());
+            reported = true;
+            setStatus(L"Ouvrez l'application sur la tablette");
+            return true;
+        }
         std::printf("Authentification : %s\n", ch.lastError().c_str());
         ch.shutdown();
+        if (ch.lastStatus() == proto::kStatusBadVersion) {
+            trayAlert(L"Mettez à jour l'application 36Screenlink de la tablette.");
+            return true;
+        }
+        // Appairage seulement pour une tablette non appairée ou appairée à un autre PC (clé
+        // différente) ; celle-ci le refuse tant que l'utilisateur ne l'a pas autorisé.
+        if (ch.lastStatus() != proto::kStatusNotPaired && ch.lastStatus() != proto::kStatusOk) return true;
         SecureChannel again;
         if (again.connectTo(host, proto::kPort, 3000)) tryPairing(again);
         return true;
@@ -453,7 +545,9 @@ bool runSession(const Options& opt, const std::string& host) {
     }
     const uint8_t displayMode = gDisplayMode;
     const uint32_t targetFps = gFps;
-    if (displayMode != proto::kDisplayTabletOnly) restoreDisplays();
+    // Après « Tablette seule », Windows peut remettre le moniteur virtuel à 60 Hz un peu plus
+    // tard tout en annonçant encore l'ancien mode : on réapplique alors le mode voulu.
+    const bool restored = displayMode != proto::kDisplayTabletOnly && restoreDisplays();
     // Dupliquer montre l'écran du PC : le moniteur virtuel n'a plus lieu d'être.
     if (displayMode == proto::kDisplayDuplicate) {
         gMonitor.release();
@@ -470,7 +564,7 @@ bool runSession(const Options& opt, const std::string& host) {
         return false;
     }
     if (!mirrorPrimary && output->isVirtual) {
-        setBestMode(output->deviceName, std::max(tabletW, tabletH), std::min(tabletW, tabletH), std::min<uint32_t>(targetFps, tabletFps));
+        setBestMode(output->deviceName, std::max(tabletW, tabletH), std::min(tabletW, tabletH), std::min<uint32_t>(targetFps, tabletFps), restored);
         setOrientation(output->deviceName, tabletH > tabletW);
         if (displayMode == proto::kDisplayTabletOnly) useOnlyDisplay(output->deviceName);
         // La rotation change les coordonnées de l'écran : on relit la description.
@@ -478,7 +572,7 @@ bool runSession(const Options& opt, const std::string& host) {
         output = pickOutput(outputs, wanted);
         if (!output) return true;
     }
-    std::wprintf(L"Capture : %ls sur %ls%ls\n", output->deviceName.c_str(), output->adapterName.c_str(),
+    logw(L"Capture : %ls sur %ls%ls\n", output->deviceName.c_str(), output->adapterName.c_str(),
                  output->primary ? L" (miroir de l'écran principal)" : L"");
 
     Capturer cap;
@@ -526,11 +620,21 @@ bool runSession(const Options& opt, const std::string& host) {
     PenInjector pen;
     pen.setTarget(output->desktop);
     pen.setEnabled(opt.injectTouch);
+    MouseInjector mouse;
+    mouse.setTarget(output->desktop);
+    mouse.setEnabled(opt.injectTouch);
 
     {
         proto::Writer w(proto::kControlState);
         w.u8(displayMode).u8(static_cast<uint8_t>(targetFps));
         if (!ch.send(w.data())) return true;
+    }
+    {
+        // UAC ou verrouillage : la tablette demande d'abord le code de l'appareil.
+        proto::Writer w(proto::kSecureState);
+        w.u8(secureDesktop ? 1 : 0);
+        if (!ch.send(w.data())) return true;
+        if (secureDesktop) std::printf("Écran sécurisé montré : saisie bloquée jusqu'à confirmation sur la tablette.\n");
     }
 
     // Utile seulement en écran étendu : ailleurs, aucune fenêtre n'est sur un autre écran visible.
@@ -540,8 +644,22 @@ bool runSession(const Options& opt, const std::string& host) {
     trayClearAlert();
     SessionStats stats;
     stats.lastPongUs = static_cast<int64_t>(nowUs());
+    stats.secureDesktop = secureDesktop;
     std::atomic<bool> alive{true};
-    std::thread receiver(receiverLoop, std::ref(ch), std::ref(touch), std::ref(keys), std::ref(pen), std::ref(follower), std::ref(stats), std::ref(alive));
+    std::thread receiver(receiverLoop, std::ref(ch), std::ref(touch), std::ref(keys), std::ref(pen), std::ref(mouse), std::ref(follower), std::ref(stats), std::ref(alive));
+    // Session en Wi-Fi alors que le câble est branché : on repasse par l'USB, plus stable.
+    std::atomic<bool> usbAvailable{false};
+    std::thread usbWatcher([&] {
+        if (!opt.autoLink || opt.link != Link::Wifi) return;
+        while (alive && !gStop) {
+            for (int i = 0; i < 50 && alive && !gStop; ++i) Sleep(100);
+            std::string state;
+            if (alive && runAdb(opt, L"get-state", &state) && state.find("device") != std::string::npos) {
+                usbAvailable = true;
+                return;
+            }
+        }
+    });
     std::thread pinger([&] {
         while (alive && !gStop) {
             proto::Writer w(proto::kPing);
@@ -572,10 +690,37 @@ bool runSession(const Options& opt, const std::string& host) {
     std::wstring linkName = opt.link == Link::Usb ? L"USB" : L"Wi-Fi";
     AudioStreamer audio;
     bool audioRunning = false, audioStateSent = false;
+    uint64_t lastKeepAwake = 0;
+    // La tablette est un écran utilisé : Windows ne doit pas éteindre les écrans, sinon la
+    // composition s'arrête et l'image se fige. La demande seule ne suffit pas toujours :
+    // un mouvement de souris nul remet aussi le minuteur d'inactivité à zéro.
+    HANDLE displayRequest = nullptr;
+    {
+        REASON_CONTEXT reason{POWER_REQUEST_CONTEXT_VERSION, POWER_REQUEST_CONTEXT_SIMPLE_STRING};
+        reason.Reason.SimpleReasonString = const_cast<LPWSTR>(L"Tablette 36Screenlink connectée");
+        displayRequest = PowerCreateRequest(&reason);
+        if (displayRequest != INVALID_HANDLE_VALUE) PowerSetRequest(displayRequest, PowerRequestDisplayRequired);
+        else displayRequest = nullptr;
+        SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED | ES_SYSTEM_REQUIRED);
+    }
 
     while (alive && !gStop) {
         // Nouveau mode ou nouvelle fréquence : la session suivante repart sur le bon écran.
         if (gRestartSession.exchange(false)) break;
+        if (usbAvailable) {
+            std::printf("Câble USB détecté : passage de la session en USB.\n");
+            break;
+        }
+        if (!secureDesktop && nowUs() - lastKeepAwake > 30'000'000) {
+            lastKeepAwake = nowUs();
+            LASTINPUTINFO last{sizeof(last)};
+            if (GetLastInputInfo(&last) && GetTickCount() - last.dwTime > 30'000) {
+                INPUT nudge{};
+                nudge.type = INPUT_MOUSE;
+                nudge.mi.dwFlags = MOUSEEVENTF_MOVE;
+                SendInput(1, &nudge, sizeof(nudge));
+            }
+        }
         const bool audioWanted = gAudioOnTablet;
         if (audioWanted != audioRunning || !audioStateSent) {
             if (audioWanted && !audioRunning) {
@@ -601,9 +746,15 @@ bool runSession(const Options& opt, const std::string& host) {
             lastDesktopCheck = nowUs();
             // Passage vers ou depuis UAC et verrouillage : nouvelle session sur le bon écran.
             if (secureScreenActive() != secureDesktop) {
-                std::wprintf(L"Bureau actif : %ls, écran sécurisé %d\n", inputDesktopName().c_str(), secureDesktop ? 0 : 1);
+                logw(L"Bureau actif : %ls, écran sécurisé %d\n", inputDesktopName().c_str(), secureDesktop ? 0 : 1);
                 break;
             }
+        }
+        // Pas de capture avant l'échéance : l'écran principal peut tourner plus vite que le flux,
+        // et chaque image capturée coûte une copie GPU. La duplication garde la plus récente.
+        if (!pending && !forceIdr) {
+            const uint64_t t = nowUs();
+            if (t + 1500 < nextEncodeUs) Sleep(static_cast<DWORD>((nextEncodeUs - t) / 1000));
         }
         CapturedFrame frame;
         const UINT timeoutMs = pending ? 0 : static_cast<UINT>(intervalUs / 1000 + 1);
@@ -703,13 +854,17 @@ bool runSession(const Options& opt, const std::string& host) {
             const double frameMs = 1000.0 / cfg.fps;
             const uint64_t elapsedSec = (now - startUs) / 1'000'000;
             const bool simulated = opt.simulateCongestion && elapsedSec >= 5 && elapsedSec < 10;
-            const bool congested = simulated || sendMs > frameMs / 2 || stats.tabletP95Lat > kCongestedLatUs;
+            // Les premières secondes, le décodeur démarre : son P95 n'indique pas une saturation.
+            const bool warmingUp = elapsedSec < 3;
+            const bool congested = simulated || sendMs > frameMs / 2 || (!warmingUp && stats.tabletP95Lat > kCongestedLatUs);
             uint32_t nextBitrate = currentBitrate;
             if (congested) {
                 nextBitrate = std::max(kMinBitrate, currentBitrate / 4 * 3);
                 calmSeconds = 0;
-            } else if (currentBitrate < cfg.bitrate && ++calmSeconds >= 3) {
-                nextBitrate = std::min(cfg.bitrate, currentBitrate / 4 * 5);
+            } else if (currentBitrate < cfg.bitrate && ++calmSeconds >= 2) {
+                // File d'envoi vide : on remonte franchement, sinon prudemment.
+                const bool idle = sendMs < frameMs / 8;
+                nextBitrate = std::min(cfg.bitrate, idle ? currentBitrate / 2 * 3 : currentBitrate / 4 * 5);
                 calmSeconds = 0;
             }
             if (nextBitrate != currentBitrate && encoder->setBitrate(nextBitrate)) {
@@ -729,11 +884,17 @@ bool runSession(const Options& opt, const std::string& host) {
     }
     timeEndPeriod(1);
     audio.stop();
+    if (displayRequest) {
+        PowerClearRequest(displayRequest, PowerRequestDisplayRequired);
+        CloseHandle(displayRequest);
+    }
+    SetThreadExecutionState(ES_CONTINUOUS);
 
     alive = false;
     ch.shutdown();
     pinger.join();
     receiver.join();
+    usbWatcher.join();
     gLastSessionEnd = std::chrono::steady_clock::now();
 
     if (encoded > 0) {
@@ -785,7 +946,7 @@ void serviceLoop(Options opt) {
             if (std::chrono::steady_clock::now() - start > std::chrono::seconds(10)) backoffMs = 500;
         }
         Sleep(backoffMs);
-        backoffMs = std::min(backoffMs * 2, 5000);
+        backoffMs = std::min(backoffMs * 2, 2000);
     }
 }
 
@@ -820,6 +981,42 @@ Options parseArgs(int argc, wchar_t** argv) {
         else if (a == L"--encoder") o.forceMediaFoundation = next() == L"mf";
     }
     return o;
+}
+
+// Journal de l'icône : chaque ligne est datée, et le journal de la session précédente est
+// gardé à côté (agent.log.1), ce qui permet de comprendre un arrêt suivi d'une relance.
+void startTimestampedLog(const std::wstring& logPath) {
+    MoveFileExW(logPath.c_str(), (logPath + L".1").c_str(), MOVEFILE_REPLACE_EXISTING);
+    // _wfsopen partagé : le journal reste lisible pendant que l'agent tourne.
+    FILE* file = _wfsopen(logPath.c_str(), L"wb", _SH_DENYNO);
+    int fds[2];
+#pragma warning(suppress : 4996)
+    if (!file || _pipe(fds, 64 * 1024, _O_BINARY) != 0 || !freopen("NUL", "w", stdout)) {
+#pragma warning(suppress : 4996)
+        if (_wfreopen(logPath.c_str(), L"w", stdout)) setvbuf(stdout, nullptr, _IONBF, 0);
+        return;
+    }
+    _dup2(fds[1], _fileno(stdout));
+    _close(fds[1]);
+    setvbuf(stdout, nullptr, _IONBF, 0);
+    std::thread([file, readFd = fds[0]] {
+        std::string pending;
+        char buf[4096];
+        int got;
+        while ((got = _read(readFd, buf, sizeof(buf))) > 0) {
+            pending.append(buf, static_cast<size_t>(got));
+            size_t eol;
+            while ((eol = pending.find('\n')) != std::string::npos) {
+                std::string line = pending.substr(0, eol);
+                pending.erase(0, eol + 1);
+                if (!line.empty() && line.back() == '\r') line.pop_back();
+                SYSTEMTIME t;
+                GetLocalTime(&t);
+                std::fprintf(file, "%04u-%02u-%02u %02u:%02u:%02u  %s\r\n", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond, line.c_str());
+                std::fflush(file);
+            }
+        }
+    }).detach();
 }
 
 // Nom lié à la session : chaque agent surveille cet événement, signalé par --stop.
@@ -879,7 +1076,7 @@ int wmain(int argc, wchar_t** argv) {
     if (opt.listOnly) {
         int i = 0;
         for (const auto& o : enumerateOutputs())
-            std::wprintf(L"%d: %ls  %ldx%ld  %ls%ls\n", i++, o.deviceName.c_str(), o.desktop.right - o.desktop.left,
+            logw(L"%d: %ls  %ldx%ld  %ls%ls\n", i++, o.deviceName.c_str(), o.desktop.right - o.desktop.left,
                          o.desktop.bottom - o.desktop.top, o.adapterName.c_str(), o.primary ? L"  [principal]" : L"");
         return 0;
     }
@@ -918,10 +1115,7 @@ int wmain(int argc, wchar_t** argv) {
     if (opt.tray) {
         const std::wstring logPath = logFilePath();
         FreeConsole();
-        // _wfreopen et non _wfreopen_s : seule la première forme laisse le fichier partagé,
-        // donc le journal reste lisible pendant que l'agent tourne.
-#pragma warning(suppress : 4996)
-        if (_wfreopen(logPath.c_str(), L"w", stdout)) setvbuf(stdout, nullptr, _IONBF, 0);
+        startTimestampedLog(logPath);
         AudioStreamer::recoverMute();
         gAudioOnTablet = loadAudioOnTablet();
         if (opt.virtualMonitor && opt.outputIndex < 0) gMonitor.start();

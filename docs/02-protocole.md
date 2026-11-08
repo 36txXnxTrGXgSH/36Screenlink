@@ -1,4 +1,4 @@
-# Protocole v4
+# Protocole v5
 
 Implémentation : `windows/agent/src/protocol.h`, `channel.cpp` côté PC, `Protocol.kt`, `StreamServer.kt`, `Crypto.kt` côté tablette.
 
@@ -32,13 +32,19 @@ La clé n'est jamais transmise. Elle est stockée sous DPAPI sur Windows et chif
 
 ## Session
 
+Chaque session ajoute un échange ECDH P-256 éphémère à la clé d'appairage : une clé d'appairage volée plus tard ne déchiffre pas une session enregistrée avant.
+
 ```text
-PC → "S36X" u8 version, u8 mode=0, nonceC[16]
-T  → "S36X" u8 statut, nonceS[16], HMAC(psk, "srv"|nonceC|nonceS)
-PC → HMAC(psk, "cli"|nonceC|nonceS)
+PC → "S36X" u8 version, u8 mode=0, nonceC[16], pubA[64]   (clé éphémère)
+T  → "S36X" u8 statut, nonceS[16], pubT[64], HMAC(psk, "srv"|C)
+       C = nonceC | nonceS | pubA | pubT
+       e = ECDH(éphémères), coordonnée X big-endian
+PC → HMAC(psk, "cli"|C)
 ```
 
-Clés AES-256-GCM : `HMAC(psk, "a2t"|nonceC|nonceS)` du PC vers la tablette, `HMAC(psk, "t2a"|...)` en sens inverse.
+Clés AES-256-GCM : `HMAC(psk, "a2t"|C|e)` du PC vers la tablette, `HMAC(psk, "t2a"|C|e)` en sens inverse. Les deux MAC couvrent les clés éphémères, donc un intermédiaire ne peut pas les remplacer. La tablette vérifie que chaque point reçu est sur la courbe.
+
+Chaque connexion s'authentifie sur son propre thread côté tablette, avec au plus 2 connexions en attente par adresse (4 en local, 16 en tout) : des connexions muettes ne retardent plus le vrai PC. Le PC ne propose un appairage que si la tablette répond « non appairée » ou présente une autre clé, et au plus une fois par minute.
 
 Statuts : 0 OK, 1 non appairée, 2 mauvaise version, 3 appairage refusé.
 
@@ -48,7 +54,7 @@ Statuts : 0 OK, 1 non appairée, 2 mauvaise version, 3 appairage refusé.
 u32 longueur | AES-256-GCM(message) | tag 16 octets
 ```
 
-Nonce de 12 octets : 4 octets nuls, puis compteur 64 bits propre à chaque sens. Taille maximale : 8 Mio. Tout échec d'authentification coupe la session.
+Nonce de 12 octets : 4 octets nuls, puis compteur 64 bits propre à chaque sens. Taille maximale : 8 Mio vers la tablette, 256 Kio vers le PC, refusée avant toute allocation. Tout échec d'authentification coupe la session. Côté tablette, chaque message est vérifié avant lecture : longueur, dimensions de 16 à 8192, rotation, codec, curseur d'au plus 256 × 256.
 
 ## Messages
 
@@ -65,16 +71,19 @@ Nonce de 12 octets : 4 octets nuls, puis compteur 64 bits propre à chaque sens.
 | 9 | CURSOR_POS | PC→T | u8 visible, i16 x, i16 y |
 | 10 | CURSOR_SHAPE | PC→T | u16 w, h, hotX, hotY, BGRA |
 | 11 | CLOCK | PC→T | i64 décalage (tablette − PC) en µs |
-| 12 | KEY | T→PC | u8 appui, u16 code (scancode set 1, 0x100 = préfixe E0) |
+| 12 | KEY | T→PC | u8 appui, u16 code (scancode set 1, 0x100 = préfixe E0 ; 0x8000 \| code virtuel Windows pour une touche sans code physique) |
 | 13 | TEXT | T→PC | Texte UTF-8 du clavier à l'écran |
-| 18 | CONTROL | T→PC | u8 réglage (1 affichage, 2 fréquence), u8 valeur |
+| 18 | CONTROL | T→PC | u8 réglage (1 affichage, 2 fréquence : 60, 120 ou 144), u8 valeur |
 | 19 | CONTROL_STATE | PC→T | u8 mode d'affichage (0 étendu, 1 dupliqué, 2 tablette seule), u8 fréquence |
 | 15 | AUDIO | PC→T | u32 fréquence, PCM stéréo 16 bits little-endian |
 | 16 | AUDIO_ROUTE | T→PC | u8 sortie demandée (0 PC, 1 tablette) |
 | 17 | AUDIO_STATE | PC→T | u8 sortie active (0 PC, 1 tablette) |
+| 20 | SECURE_STATE | PC→T | u8 1 si l'écran montré est l'UAC ou le verrouillage |
+| 21 | SECURE_ARMED | T→PC | vide : identité confirmée sur la tablette, la saisie est acceptée sur l'écran sécurisé |
+| 22 | MOUSE | T→PC | u8 boutons (1 gauche, 2 droit, 4 milieu), u16 x, u16 y, i16 molette verticale, i16 horizontale (crans de 120) |
 | 14 | PEN | T→PC | u8 état (1 portée, 2 contact, 4 bouton, 8 gomme), u16 x, u16 y, u16 pression 0..1024, i8 tiltX, i8 tiltY, u16 rotation |
 
-À un changement d'orientation, la tablette ferme la session. Le PC se reconnecte et lit la nouvelle orientation dans HELLO : hauteur supérieure à la largeur signifie portrait.
+À un changement de taille d'écran (orientation), la tablette ferme la session ; un clavier branché ou le mode sombre ne la coupent plus. Le PC se reconnecte et lit la nouvelle orientation dans HELLO : hauteur supérieure à la largeur signifie portrait.
 
 Un ping part toutes les 250 ms. Seul l'aller-retour le plus court met à jour le décalage d'horloge. Sans réponse pendant 5 s, le PC coupe et se reconnecte.
 
@@ -84,6 +93,5 @@ Un ping part toutes les 250 ms. Seul l'aller-retour le plus court met à jour le
 
 ## Limites connues
 
-- Pas de confidentialité persistante : compromettre la clé partagée permet de déchiffrer une session enregistrée.
 - Le Wi-Fi utilise TCP. La variante UDP avec NACK/FEC reste à faire ; TCP ajoute de la latence en cas de perte radio.
 - QR code non implémenté : l'appairage repose sur un code à comparer.

@@ -33,13 +33,18 @@ import android.widget.TextView
  * Beaucoup d'appareils n'ont pas le flou de fenêtre d'Android : le verre floute lui-même une
  * copie réduite de l'image reçue, ce qui fonctionne partout.
  */
-class SideMenu(private val appContext: Context, private val video: SurfaceView, private val actions: Actions) {
+class SideMenu(
+    private val appContext: Context,
+    private val video: SurfaceView,
+    private val actions: Actions,
+    private val frameRates: List<Int>,
+) {
 
     interface Actions {
         fun onAudioToggle()
         fun onKeyboard()
         fun onDisplayMode(mode: Int)
-        fun onFrameRateToggle()
+        fun onFrameRate(fps: Int)
         fun onRotationLockToggle()
         fun onTouchToggle()
         fun onWindowsKey()
@@ -80,8 +85,8 @@ class SideMenu(private val appContext: Context, private val video: SurfaceView, 
     private val mode = Segments(listOf("Étendu" to null, "Dupliquer" to null, "Tablette seule" to null)) {
         actions.onDisplayMode(it)
     }
-    private val rate = Segments(listOf("60 Hz" to null, "120 Hz" to null)) {
-        if (FRAME_RATES[it] != frameRate) actions.onFrameRateToggle()
+    private val rate = Segments(frameRates.map { "$it Hz" to null }) {
+        if (frameRates[it] != frameRate) actions.onFrameRate(frameRates[it])
     }
     private val rotationRow = Setting(appContext, R.drawable.ms_screen_rotation, "Rotation") { actions.onRotationLockToggle() }
     private val touchRow = Setting(appContext, R.drawable.ms_touch_app, "Tactile") { actions.onTouchToggle() }
@@ -216,7 +221,7 @@ class SideMenu(private val appContext: Context, private val video: SurfaceView, 
         frameRate = fps
         audio.select(if (audioOnTablet) 1 else 0)
         mode.select(displayMode)
-        rate.select(FRAME_RATES.indexOf(fps))
+        rate.select(frameRates.indexOf(fps))
         rotationRow.set(!rotationLocked, if (rotationLocked) "Verrouillée" else "Automatique")
         touchRow.set(touchEnabled, if (touchEnabled) "Activé" else "Coupé")
     }
@@ -403,9 +408,9 @@ class SideMenu(private val appContext: Context, private val video: SurfaceView, 
         private const val GAP_DP = 16
         private const val BLUR_DP = 24
         private const val GLASS_SCALE = 8
-        private const val GLASS_REFRESH_MS = 100L
+        // 5 images par seconde suffisent à un fond flouté, pour moitié moins de calcul.
+        private const val GLASS_REFRESH_MS = 200L
         private const val ANIMATION_MS = 160L
-        private val FRAME_RATES = listOf(60, 120)
         private const val GLASS_TINT = 0x66141A2A
         private const val EMPTY_GLASS = 0xE6141A2A.toInt()
         private const val GLASS_FILL = 0x24FFFFFF

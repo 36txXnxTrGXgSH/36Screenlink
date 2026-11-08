@@ -46,8 +46,19 @@ class PairingKey {
     val publicBytes: ByteArray = (pair.public as ECPublicKey).w.let { fixed(it.affineX) + fixed(it.affineY) }
 
     fun agree(peer: ByteArray): ByteArray {
-        val point = ECPoint(BigInteger(1, peer.copyOfRange(0, 32)), BigInteger(1, peer.copyOfRange(32, 64)))
+        require(peer.size == 64) { "clé publique invalide" }
+        val x = BigInteger(1, peer.copyOfRange(0, 32))
+        val y = BigInteger(1, peer.copyOfRange(32, 64))
         val params = (pair.public as ECPublicKey).params
+        // Validation explicite, sans dépendre du fournisseur : le point doit être sur la courbe
+        // (y² = x³ + ax + b mod p), donc ni à l'infini ni sur une courbe faible.
+        val curve = params.curve
+        val p = (curve.field as java.security.spec.ECFieldFp).p
+        require(x.signum() >= 0 && x < p && y.signum() >= 0 && y < p) { "point hors du corps" }
+        val left = y.multiply(y).mod(p)
+        val right = x.multiply(x).multiply(x).add(curve.a.multiply(x)).add(curve.b).mod(p)
+        require(left == right) { "point hors de la courbe" }
+        val point = ECPoint(x, y)
         val peerKey = KeyFactory.getInstance("EC").generatePublic(ECPublicKeySpec(point, params))
         return KeyAgreement.getInstance("ECDH").run {
             init(pair.private)
@@ -77,6 +88,10 @@ class PairingStore(private val file: File) {
     }
 
     fun exists() = file.exists()
+
+    fun delete() {
+        file.delete()
+    }
 
     fun save(psk: ByteArray) {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")

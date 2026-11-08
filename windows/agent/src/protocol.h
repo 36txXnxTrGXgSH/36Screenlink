@@ -1,4 +1,4 @@
-// Protocole v1, voir docs/02-protocole.md. Toute modification se reporte dans
+// Protocole v5, voir docs/02-protocole.md. Toute modification se reporte dans
 // android/app/src/main/java/com/screenlink36/app/Protocol.kt.
 #pragma once
 #include <cstdint>
@@ -7,9 +7,12 @@
 namespace proto {
 
 inline constexpr uint16_t kPort = 7236;
-inline constexpr uint8_t kVersion = 4;
+// v5 : clés de session dérivées aussi d'un ECDH éphémère (confidentialité persistante).
+inline constexpr uint8_t kVersion = 5;
 inline constexpr char kMagic[4] = {'S', '3', '6', 'X'};
 inline constexpr uint32_t kMaxRecord = 8 * 1024 * 1024;
+// La tablette n'envoie que de petits messages : au-delà, l'enregistrement est refusé avant allocation.
+inline constexpr uint32_t kMaxIncomingRecord = 256 * 1024;
 
 enum HandshakeMode : uint8_t { kModeSession = 0, kModePair = 1 };
 enum HandshakeStatus : uint8_t { kStatusOk = 0, kStatusNotPaired = 1, kStatusBadVersion = 2, kStatusPairRefused = 3 };
@@ -26,7 +29,7 @@ enum Msg : uint8_t {
     kCursorPos = 9,    // A->T u8 visible, i16 x, i16 y
     kCursorShape = 10, // A->T u16 w, h, hotX, hotY, BGRA
     kClock = 11,       // A->T i64 offsetUs (tablette - agent)
-    kKey = 12,         // T->A u8 down, u16 code (scancode set 1, 0x100 = préfixe E0)
+    kKey = 12,         // T->A u8 down, u16 code (scancode set 1, 0x100 = préfixe E0 ; 0x8000 = code virtuel Windows)
     kText = 13,        // T->A texte UTF-8 du clavier à l'écran
     kPen = 14,         // T->A u8 état, u16 x, u16 y, u16 pression 0..1024, i8 tiltX, i8 tiltY, u16 rotation
     kAudio = 15,       // A->T u32 fréquence, PCM stéréo 16 bits little-endian
@@ -34,10 +37,16 @@ enum Msg : uint8_t {
     kAudioState = 17,  // A->T u8 sortie active (0 PC, 1 tablette)
     kControl = 18,     // T->A u8 réglage, u8 valeur
     kControlState = 19, // A->T u8 mode d'affichage, u8 fréquence
+    kSecureState = 20, // A->T u8 1 si l'écran montré est l'UAC ou le verrouillage
+    kSecureArmed = 21, // T->A vide : l'utilisateur a confirmé son identité sur la tablette
+    kMouse = 22,       // T->A u8 boutons (1 gauche, 2 droit, 4 milieu), u16 x, u16 y, i16 molette verticale, i16 horizontale
 };
 
 enum Control : uint8_t { kControlDisplay = 1, kControlFps = 2 };
 enum DisplayMode : uint8_t { kDisplayExtended = 0, kDisplayDuplicate = 1, kDisplayTabletOnly = 2 };
+
+enum MouseButton : uint8_t { kMouseLeft = 1, kMouseRight = 2, kMouseMiddle = 4 };
+inline constexpr uint16_t kKeyVirtual = 0x8000;
 
 enum PenState : uint8_t { kPenInRange = 1, kPenContact = 2, kPenBarrel = 4, kPenEraser = 8 };
 

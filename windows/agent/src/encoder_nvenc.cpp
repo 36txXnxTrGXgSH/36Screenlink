@@ -52,7 +52,7 @@ bool NvencEncoder::open(ID3D11Device* device, ID3D11Texture2D* input, EncoderCon
     preset.version = NV_ENC_PRESET_CONFIG_VER;
     preset.presetCfg.version = NV_ENC_CONFIG_VER;
     st = api_.nvEncGetEncodePresetConfigEx(session_, codec, NV_ENC_PRESET_P1_GUID,
-                                           NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY, &preset);
+                                           NV_ENC_TUNING_INFO_LOW_LATENCY, &preset);
     if (st != NV_ENC_SUCCESS) return fail("preset", st);
 
     NV_ENC_CONFIG config = preset.presetCfg;
@@ -96,7 +96,7 @@ bool NvencEncoder::open(ID3D11Device* device, ID3D11Texture2D* input, EncoderCon
     init.version = NV_ENC_INITIALIZE_PARAMS_VER;
     init.encodeGUID = codec;
     init.presetGUID = NV_ENC_PRESET_P1_GUID;
-    init.tuningInfo = NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY;
+    init.tuningInfo = NV_ENC_TUNING_INFO_LOW_LATENCY;
     init.encodeWidth = init.darWidth = cfg.width;
     init.encodeHeight = init.darHeight = cfg.height;
     init.frameRateNum = cfg.fps;

@@ -23,7 +23,7 @@ private:
     bool createTransform(const GUID& subtype, const LUID& adapter);
     bool configure(const GUID& subtype);
     bool createConverter();
-    bool convertFrame();
+    bool convertFrame(int slot);
     bool pumpEvents(const Sink& sink, uint32_t waitMs, bool stopOnOutput);
     bool drainOutput(const Sink& sink);
     bool fail(const char* what, HRESULT hr);
@@ -31,13 +31,19 @@ private:
     template <typename T> using Ptr = Microsoft::WRL::ComPtr<T>;
     Ptr<ID3D11Device> device_;
     Ptr<ID3D11DeviceContext> context_;
-    Ptr<ID3D11Texture2D> input_, nv12_;
+    // Plusieurs images NV12 en rotation : l'encodeur asynchrone lit encore la précédente
+    // pendant qu'on convertit la suivante. Échantillons créés une fois, jamais par image.
+    static constexpr int kSlots = 3;
+    Ptr<ID3D11Texture2D> input_, nv12_[kSlots];
+    Ptr<IMFSample> inputSamples_[kSlots];
+    Ptr<IMFSample> outputSample_;
+    int nextSlot_ = 0;
     Ptr<ID3D11VideoDevice> videoDevice_;
     Ptr<ID3D11VideoContext> videoContext_;
     Ptr<ID3D11VideoProcessorEnumerator> processorEnum_;
     Ptr<ID3D11VideoProcessor> processor_;
     Ptr<ID3D11VideoProcessorInputView> inputView_;
-    Ptr<ID3D11VideoProcessorOutputView> outputView_;
+    Ptr<ID3D11VideoProcessorOutputView> outputView_[kSlots];
     Ptr<IMFDXGIDeviceManager> manager_;
     Ptr<IMFActivate> activate_;
     Ptr<IMFTransform> transform_;

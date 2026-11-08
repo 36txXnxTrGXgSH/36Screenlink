@@ -1,5 +1,8 @@
 #include "input.h"
 
+#include <algorithm>
+#include <cstdio>
+
 namespace {
 
 constexpr UINT32 kMaxContacts = 10;
@@ -56,7 +59,13 @@ void TouchInjector::apply(const std::vector<Contact>& contacts) {
         if (!listed) batch.push_back(makeContact(id, p, POINTER_FLAG_UP));
     }
     active_ = std::move(next);
-    if (!batch.empty()) InjectSyntheticPointerInput(device_, batch.data(), static_cast<UINT32>(batch.size()));
+    // Au-delà de 10 contacts, Windows refuserait toute la trame.
+    if (batch.size() > kMaxContacts) batch.resize(kMaxContacts);
+    if (!batch.empty() && !InjectSyntheticPointerInput(device_, batch.data(), static_cast<UINT32>(batch.size()))) {
+        static bool reported = false;
+        if (!reported) std::printf("Injection tactile refusée : %lu\n", GetLastError());
+        reported = true;
+    }
 }
 
 void TouchInjector::releaseAll() {
@@ -116,6 +125,24 @@ KeyInjector::~KeyInjector() {
 void KeyInjector::send(uint16_t code, bool down) {
     INPUT input{};
     input.type = INPUT_KEYBOARD;
+    if (code & 0x8000) {
+        // Code virtuel : touche sans position physique connue (clavier à l'écran, F1-F12...).
+        const WORD vk = static_cast<WORD>(code & 0xFF);
+        input.ki.wVk = vk;
+        input.ki.wScan = static_cast<WORD>(MapVirtualKeyW(vk, MAPVK_VK_TO_VSC));
+        switch (vk) {
+        case VK_HOME: case VK_END: case VK_PRIOR: case VK_NEXT: case VK_INSERT: case VK_DELETE:
+        case VK_LEFT: case VK_RIGHT: case VK_UP: case VK_DOWN: case VK_RCONTROL: case VK_RMENU:
+        case VK_LWIN: case VK_RWIN: case VK_APPS:
+            input.ki.dwFlags |= KEYEVENTF_EXTENDEDKEY;
+            break;
+        default:
+            break;
+        }
+        if (!down) input.ki.dwFlags |= KEYEVENTF_KEYUP;
+        SendInput(1, &input, sizeof(input));
+        return;
+    }
     input.ki.wScan = static_cast<WORD>(code & 0xFF);
     input.ki.dwFlags = KEYEVENTF_SCANCODE;
     if (code & 0x100) input.ki.dwFlags |= KEYEVENTF_EXTENDEDKEY;
@@ -149,4 +176,47 @@ void KeyInjector::text(const std::string& utf8) {
         inputs.push_back(in);
     }
     SendInput(static_cast<UINT>(inputs.size()), inputs.data(), sizeof(INPUT));
+}
+
+MouseInjector::~MouseInjector() {
+    // Bouton tenu au moment de la coupure : relâché, sinon Windows garderait un glisser en cours.
+    if (buttons_) apply({0, 0, 0, 0, 0});
+}
+
+void MouseInjector::apply(const MouseSample& s) {
+    if (!enabled_) return;
+    std::vector<INPUT> inputs;
+    const auto add = [&](DWORD flags, DWORD data = 0) {
+        INPUT in{};
+        in.type = INPUT_MOUSE;
+        in.mi.dwFlags = flags;
+        in.mi.mouseData = data;
+        inputs.push_back(in);
+    };
+    if (s.buttons || s.x || s.y) {
+        // Coordonnées absolues sur tout le bureau virtuel, de 0 à 65535.
+        const LONG vx = GetSystemMetrics(SM_XVIRTUALSCREEN), vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
+        const LONG vw = std::max(1, GetSystemMetrics(SM_CXVIRTUALSCREEN) - 1), vh = std::max(1, GetSystemMetrics(SM_CYVIRTUALSCREEN) - 1);
+        const LONG w = target_.right - target_.left, h = target_.bottom - target_.top;
+        const LONG px = target_.left + MulDiv(s.x, w - 1, 65535), py = target_.top + MulDiv(s.y, h - 1, 65535);
+        INPUT move{};
+        move.type = INPUT_MOUSE;
+        move.mi.dx = MulDiv(px - vx, 65535, vw);
+        move.mi.dy = MulDiv(py - vy, 65535, vh);
+        move.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
+        inputs.push_back(move);
+    }
+    const struct { uint8_t bit; DWORD down, up; } map[] = {
+        {1, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP},
+        {2, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP},
+        {4, MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP},
+    };
+    for (const auto& m : map) {
+        const bool was = buttons_ & m.bit, now = s.buttons & m.bit;
+        if (now != was) add(now ? m.down : m.up);
+    }
+    if (s.wheelV) add(MOUSEEVENTF_WHEEL, static_cast<DWORD>(static_cast<LONG>(s.wheelV)));
+    if (s.wheelH) add(MOUSEEVENTF_HWHEEL, static_cast<DWORD>(static_cast<LONG>(s.wheelH)));
+    buttons_ = s.buttons;
+    if (!inputs.empty()) SendInput(static_cast<UINT>(inputs.size()), inputs.data(), sizeof(INPUT));
 }

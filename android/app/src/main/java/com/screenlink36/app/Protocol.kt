@@ -3,7 +3,7 @@ package com.screenlink36.app
 // Miroir de windows/agent/src/protocol.h : toute modification se reporte des deux côtés.
 object Protocol {
     const val PORT = 7236
-    const val VERSION = 4
+    const val VERSION = 5
     const val MAX_RECORD = 8 * 1024 * 1024
     val MAGIC = byteArrayOf('S'.code.toByte(), '3'.code.toByte(), '6'.code.toByte(), 'X'.code.toByte())
 
@@ -34,6 +34,11 @@ object Protocol {
     const val MSG_AUDIO_STATE = 17
     const val MSG_CONTROL = 18
     const val MSG_CONTROL_STATE = 19
+    const val MSG_SECURE_STATE = 20
+    const val MSG_SECURE_ARMED = 21
+    const val MSG_MOUSE = 22
+
+    const val KEY_VIRTUAL = 0x8000
 
     const val CONTROL_DISPLAY = 1
     const val CONTROL_FPS = 2

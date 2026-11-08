@@ -76,3 +76,23 @@ private:
     uint64_t received_ = 0;
     std::set<uint16_t> held_;
 };
+
+struct MouseSample {
+    uint8_t buttons;
+    uint16_t x, y; // 0..65535 sur la surface d'affichage
+    int16_t wheelV, wheelH; // crans de 120, comme Windows
+};
+
+// Souris branchée à la tablette : position absolue sur l'écran étendu, boutons et molettes.
+class MouseInjector {
+public:
+    ~MouseInjector();
+    void setTarget(const RECT& desktop) { target_ = desktop; }
+    void setEnabled(bool enabled) { enabled_ = enabled; }
+    void apply(const MouseSample& sample);
+
+private:
+    RECT target_{};
+    bool enabled_ = true;
+    uint8_t buttons_ = 0;
+};

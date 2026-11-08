@@ -16,7 +16,8 @@ function Get-DriverPackages {
 
 function Remove-Driver {
     foreach ($package in Get-DriverPackages) { pnputil /delete-driver $package /uninstall /force | Out-Null }
-    foreach ($store in 'Root', 'TrustedPublisher') {
+    # New-SelfSignedCertificate en laisse aussi une copie dans le magasin CA.
+    foreach ($store in 'Root', 'TrustedPublisher', 'CA', 'My') {
         Get-ChildItem "Cert:\LocalMachine\$store" | Where-Object Subject -eq $subject | Remove-Item
     }
 }
@@ -25,7 +26,14 @@ if ($Action -eq 'Remove') {
     Remove-Driver
     exit 0
 }
-if (-not $Force -and (Get-DriverPackages)) { exit 0 }
+if (-not $Force -and (Get-DriverPackages)) {
+    # Pilote déjà là : on retire seulement les copies inutiles des anciennes installations, sans
+    # clé privée. Le certificat de confiance (Root, TrustedPublisher) reste en place.
+    foreach ($store in 'CA', 'My') {
+        Get-ChildItem "Cert:\LocalMachine\$store" | Where-Object Subject -eq $subject | Remove-Item
+    }
+    exit 0
+}
 Remove-Driver
 
 $stage = Join-Path $env:ProgramData '36Screenlink-stage'

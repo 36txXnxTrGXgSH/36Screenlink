@@ -1,5 +1,40 @@
 # Résultats de tests — 2026-10-31
 
+## Campagne de validation et corrections 1.6
+
+Corrections issues de la campagne du 8 novembre 2026 (fonctionnel, sécurité, performance). Tests sur le service installé, PC et tablette de référence, en USB. Les scripts sont ceux de la campagne : entrées A3, modes A5, moniteur A1, plus une charge vidéo plein écran sur l'écran virtuel.
+
+| Vérification | Avant | 1.6 |
+|---|---|---|
+| Clavier physique branché puis retiré (A3.8) | 3 coupures de session | **0** |
+| F5, Début, Page suivante, Ctrl+A sans code physique (A3.7) | 0 sur 4 | **4 sur 4** |
+| Clic de souris branchée à la tablette (A3.13) | reçu comme toucher | **reçu comme souris** |
+| Molette de souris (A3.14 et crochet souris Windows) | rien | **WM_MOUSEWHEEL, 3 crans** |
+| Retour Étendu après Tablette seule (A5.5) | 60 Hz | **120 Hz** |
+| Autres contrôles A3, A5, A1 | OK | OK, inchangés |
+| PC sans saisie pendant 8 min, animation sur la tablette | image figée vers 300 s | **jamais figée**, demande d'affichage visible dans `powercfg /requests` |
+| Latence sous charge à 60 Hz, 80 Mb/s | 45,2 ms, décodage 21,4 ms | **36,2 ms**, décodage 18,6 ms |
+| Latence sous charge à 120 Hz | 25,7 ms | 26,3 ms |
+| 144 Hz depuis le menu | impossible | **OK**, 24,6 ms |
+| Media Foundation HEVC sous charge, textures en rotation | encodage 7,6 ms, 27,2 ms | 7,7 ms, 27,9 ms : sans régression |
+| Capture pour 120 images envoyées | 145 à 165 i/s | 123 à 134 i/s |
+| Poignée de main v5 avec clé éphémère | — | OK, appairage conservé |
+| Journal daté, journal précédent gardé | — | OK |
+| Certificats dans `LocalMachine\CA` (A1.13) | 11 | 1 |
+
+**Corrigé grâce aux tests :**
+- un plantage de l'application à sa fermeture : une interruption pendant l'arrêt du décodeur n'était pas rattrapée ;
+- Retour fermait l'application d'un coup : Android 16 n'appelle plus l'ancienne méthode.
+
+**Non testé :**
+- confirmation d'identité avant l'UAC : il faut l'option à l'installation et une vraie invite ;
+- famine du serveur de la tablette et curseur géant, sur l'appareil lui-même ;
+- file d'envoi réduite sous vraie saturation Wi-Fi ;
+- vraie souris (clic droit, survol) ;
+- Alt+² au clavier physique ;
+- multi-touch à 5 et 10 doigts ;
+- GPU AMD et Intel.
+
 ## Menu en verre dépoli 1.5
 
 Test sur la tablette de référence en USB, gestes simulés par adb. Cette tablette n'a pas le flou de fenêtre d'Android : le verre floute une copie réduite de l'image reçue, rafraîchie 10 fois par seconde.

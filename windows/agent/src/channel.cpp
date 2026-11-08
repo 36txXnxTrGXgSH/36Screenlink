@@ -8,15 +8,9 @@
 
 namespace {
 
-std::vector<uint8_t> labeled(const char* label, const uint8_t c[16], const uint8_t s[16]) {
-    std::vector<uint8_t> v(label, label + std::strlen(label));
-    v.insert(v.end(), c, c + 16);
-    v.insert(v.end(), s, s + 16);
-    return v;
-}
-
-Key256 derive(const Key256& psk, const char* label, const uint8_t c[16], const uint8_t s[16]) {
-    const auto msg = labeled(label, c, s);
+Key256 derive(const Key256& psk, const char* label, const std::vector<uint8_t>& context) {
+    std::vector<uint8_t> msg(label, label + std::strlen(label));
+    msg.insert(msg.end(), context.begin(), context.end());
     return hmacSha256(psk, msg.data(), msg.size());
 }
 
@@ -59,10 +53,10 @@ bool SecureChannel::connectTo(const std::string& host, uint16_t port, int timeou
     nonBlocking = 0;
     ioctlsocket(sock_, FIONBIO, &nonBlocking);
 
-    // Petite file d'envoi : si le lien sature, l'envoi bloque et la capture
-    // saute des images, au lieu d'accumuler du retard.
+    // Petite file d'envoi, environ deux images à 80 Mb/s : si le lien sature, l'envoi bloque
+    // aussitôt et le débit baisse, au lieu d'accumuler des centaines de millisecondes de retard.
     BOOL noDelay = TRUE;
-    int sendBuf = 512 * 1024;
+    int sendBuf = 192 * 1024;
     DWORD recvTimeout = 5000;
     setsockopt(sock_, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<char*>(&noDelay), sizeof(noDelay));
     setsockopt(sock_, SOL_SOCKET, SO_SNDBUF, reinterpret_cast<char*>(&sendBuf), sizeof(sendBuf));
@@ -105,21 +99,12 @@ bool SecureChannel::readStatus() {
         error_ = "réponse invalide";
         return false;
     }
+    status_ = reply[4];
     if (reply[4] != proto::kStatusOk) {
         error_ = reply[4] == proto::kStatusNotPaired ? "tablette non appairée" : "refus de la tablette";
         return false;
     }
     return true;
-}
-
-bool SecureChannel::exchangeHello(uint8_t nonceS[16], uint8_t mac[32], uint8_t nonceC[16]) {
-    randomBytes(nonceC, 16);
-    std::vector<uint8_t> hello(proto::kMagic, proto::kMagic + 4);
-    hello.push_back(proto::kVersion);
-    hello.push_back(proto::kModeSession);
-    hello.insert(hello.end(), nonceC, nonceC + 16);
-    if (!writeAll(hello.data(), hello.size())) return false;
-    return readStatus() && readAll(nonceS, 16) && readAll(mac, 32);
 }
 
 bool SecureChannel::pair(Key256& psk, const std::function<bool(uint32_t code)>& confirm) {
@@ -176,19 +161,45 @@ bool SecureChannel::pair(Key256& psk, const std::function<bool(uint32_t code)>& 
     return true;
 }
 
+// Chaque session ajoute un ECDH éphémère à la clé d'appairage : une clé volée plus tard ne
+// déchiffre pas un flux enregistré avant. Les MAC couvrent les clés éphémères des deux côtés.
 bool SecureChannel::handshake(const Key256& psk) {
-    uint8_t nonceC[16], nonceS[16], mac[32];
-    if (!exchangeHello(nonceS, mac, nonceC)) return false;
+    EcdhP256 ecdh;
+    uint8_t nonceC[16], nonceS[16], pubA[64], pubT[64], mac[32], raw[32];
+    randomBytes(nonceC, 16);
+    if (!ecdh.generate() || !ecdh.publicKey(pubA)) {
+        error_ = "génération de clé";
+        return false;
+    }
+    std::vector<uint8_t> hello(proto::kMagic, proto::kMagic + 4);
+    hello.push_back(proto::kVersion);
+    hello.push_back(proto::kModeSession);
+    hello.insert(hello.end(), nonceC, nonceC + 16);
+    hello.insert(hello.end(), pubA, pubA + 64);
+    if (!writeAll(hello.data(), hello.size()) || !readStatus() || !readAll(nonceS, 16) || !readAll(pubT, 64) || !readAll(mac, 32)) return false;
 
-    const Key256 expected = derive(psk, "srv", nonceC, nonceS);
+    std::vector<uint8_t> context(nonceC, nonceC + 16);
+    context.insert(context.end(), nonceS, nonceS + 16);
+    context.insert(context.end(), pubA, pubA + 64);
+    context.insert(context.end(), pubT, pubT + 64);
+    const Key256 expected = derive(psk, "srv", context);
     if (!constantTimeEqual(mac, expected.data(), 32)) {
         error_ = "authentification de la tablette échouée";
         return false;
     }
-    const Key256 clientMac = derive(psk, "cli", nonceC, nonceS);
+    if (!ecdh.agree(pubT, raw)) {
+        error_ = "clé éphémère de la tablette invalide";
+        return false;
+    }
+    const Key256 clientMac = derive(psk, "cli", context);
     if (!writeAll(clientMac.data(), clientMac.size())) return false;
 
-    return tx_.init(derive(psk, "a2t", nonceC, nonceS)) && rx_.init(derive(psk, "t2a", nonceC, nonceS));
+    std::vector<uint8_t> keyed = context;
+    keyed.insert(keyed.end(), raw, raw + 32);
+    SecureZeroMemory(raw, sizeof(raw));
+    const bool ok = tx_.init(derive(psk, "a2t", keyed)) && rx_.init(derive(psk, "t2a", keyed));
+    SecureZeroMemory(keyed.data(), keyed.size());
+    return ok;
 }
 
 bool SecureChannel::send(const std::vector<uint8_t>& plain) {
@@ -207,7 +218,7 @@ bool SecureChannel::receive(std::vector<uint8_t>& plain) {
     uint8_t lenBytes[4];
     if (!readAll(lenBytes, 4)) return false;
     const uint32_t len = (uint32_t(lenBytes[0]) << 24) | (uint32_t(lenBytes[1]) << 16) | (uint32_t(lenBytes[2]) << 8) | lenBytes[3];
-    if (len < Aes256Gcm::kTag || len > proto::kMaxRecord) {
+    if (len < Aes256Gcm::kTag || len > proto::kMaxIncomingRecord) {
         error_ = "taille d'enregistrement invalide";
         return false;
     }

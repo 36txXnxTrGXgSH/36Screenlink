@@ -1,6 +1,7 @@
 #include <initguid.h>
 
 #include "encoder_mf.h"
+#include "logw.h"
 
 #include <codecapi.h>
 #include <d3d10.h>
@@ -81,7 +82,7 @@ bool MediaFoundationEncoder::createTransform(const GUID& subtype, const LUID& ad
 
     wchar_t name[128] = {};
     activate_->GetString(MFT_FRIENDLY_NAME_Attribute, name, 128, nullptr);
-    std::wprintf(L"Encodeur matériel : %ls\n", name);
+    logw(L"Encodeur matériel : %ls\n", name);
     return true;
 }
 
@@ -157,12 +158,14 @@ bool MediaFoundationEncoder::createConverter() {
     desc.SampleDesc.Count = 1;
     desc.Usage = D3D11_USAGE_DEFAULT;
     desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_VIDEO_ENCODER;
-    hr = device_->CreateTexture2D(&desc, nullptr, &nv12_);
-    if (FAILED(hr)) {
-        desc.BindFlags = D3D11_BIND_RENDER_TARGET;
-        hr = device_->CreateTexture2D(&desc, nullptr, &nv12_);
+    for (int i = 0; i < kSlots; ++i) {
+        hr = device_->CreateTexture2D(&desc, nullptr, &nv12_[i]);
+        if (FAILED(hr) && desc.BindFlags != D3D11_BIND_RENDER_TARGET) {
+            desc.BindFlags = D3D11_BIND_RENDER_TARGET;
+            hr = device_->CreateTexture2D(&desc, nullptr, &nv12_[i]);
+        }
+        if (FAILED(hr)) return fail("texture NV12", hr);
     }
-    if (FAILED(hr)) return fail("texture NV12", hr);
 
     D3D11_VIDEO_PROCESSOR_CONTENT_DESC content{};
     content.InputFrameFormat = D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE;
@@ -181,8 +184,19 @@ bool MediaFoundationEncoder::createConverter() {
     if (FAILED(hr)) return fail("vue d'entrée", hr);
     D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC outputDesc{};
     outputDesc.ViewDimension = D3D11_VPOV_DIMENSION_TEXTURE2D;
-    hr = videoDevice_->CreateVideoProcessorOutputView(nv12_.Get(), processorEnum_.Get(), &outputDesc, &outputView_);
-    if (FAILED(hr)) return fail("vue de sortie", hr);
+    for (int i = 0; i < kSlots; ++i) {
+        hr = videoDevice_->CreateVideoProcessorOutputView(nv12_[i].Get(), processorEnum_.Get(), &outputDesc, &outputView_[i]);
+        if (FAILED(hr)) return fail("vue de sortie", hr);
+        ComPtr<IMFMediaBuffer> buffer;
+        hr = MFCreateDXGISurfaceBuffer(__uuidof(ID3D11Texture2D), nv12_[i].Get(), 0, FALSE, &buffer);
+        if (FAILED(hr)) return fail("tampon d'image", hr);
+        ComPtr<IMF2DBuffer> buffer2d;
+        DWORD length = 0;
+        if (SUCCEEDED(buffer.As(&buffer2d))) buffer2d->GetContiguousLength(&length);
+        buffer->SetCurrentLength(length);
+        MFCreateSample(&inputSamples_[i]);
+        inputSamples_[i]->AddBuffer(buffer.Get());
+    }
 
     // BT.709 limité : c'est ce que lit le décodeur de la tablette.
     D3D11_VIDEO_PROCESSOR_COLOR_SPACE source{};
@@ -238,26 +252,31 @@ bool MediaFoundationEncoder::open(ID3D11Device* device, ID3D11Texture2D* input, 
     return false;
 }
 
-bool MediaFoundationEncoder::convertFrame() {
+bool MediaFoundationEncoder::convertFrame(int slot) {
     D3D11_VIDEO_PROCESSOR_STREAM stream{};
     stream.Enable = TRUE;
     stream.pInputSurface = inputView_.Get();
-    const HRESULT hr = videoContext_->VideoProcessorBlt(processor_.Get(), outputView_.Get(), 0, 1, &stream);
+    const HRESULT hr = videoContext_->VideoProcessorBlt(processor_.Get(), outputView_[slot].Get(), 0, 1, &stream);
     return SUCCEEDED(hr) || fail("conversion NV12", hr);
 }
 
 bool MediaFoundationEncoder::drainOutput(const Sink& sink) {
     MFT_OUTPUT_DATA_BUFFER output{};
     output.dwStreamID = outputStream_;
-    ComPtr<IMFSample> supplied;
     if (!samplesProvided_) {
-        MFT_OUTPUT_STREAM_INFO info{};
-        transform_->GetOutputStreamInfo(outputStream_, &info);
+        // Tampon de sortie fourni par nous : créé une fois, réutilisé à chaque image.
+        if (!outputSample_) {
+            MFT_OUTPUT_STREAM_INFO info{};
+            transform_->GetOutputStreamInfo(outputStream_, &info);
+            ComPtr<IMFMediaBuffer> buffer;
+            MFCreateSample(&outputSample_);
+            MFCreateMemoryBuffer(info.cbSize, &buffer);
+            outputSample_->AddBuffer(buffer.Get());
+        }
         ComPtr<IMFMediaBuffer> buffer;
-        MFCreateSample(&supplied);
-        MFCreateMemoryBuffer(info.cbSize, &buffer);
-        supplied->AddBuffer(buffer.Get());
-        output.pSample = supplied.Get();
+        if (SUCCEEDED(outputSample_->GetBufferByIndex(0, &buffer))) buffer->SetCurrentLength(0);
+        outputSample_->DeleteAllItems();
+        output.pSample = outputSample_.Get();
     }
     DWORD status = 0;
     HRESULT hr = transform_->ProcessOutput(0, 1, &output, &status);
@@ -266,7 +285,8 @@ bool MediaFoundationEncoder::drainOutput(const Sink& sink) {
     if (FAILED(hr)) return fail("sortie de l'encodeur", hr);
 
     ComPtr<IMFSample> sample;
-    sample.Attach(samplesProvided_ ? output.pSample : supplied.Detach());
+    if (samplesProvided_) sample.Attach(output.pSample);
+    else sample = outputSample_;
     ComPtr<IMFMediaBuffer> buffer;
     hr = sample->ConvertToContiguousBuffer(&buffer);
     if (FAILED(hr)) return fail("tampon de sortie", hr);
@@ -308,24 +328,18 @@ bool MediaFoundationEncoder::pumpEvents(const Sink& sink, uint32_t waitMs, bool 
 bool MediaFoundationEncoder::encode(uint64_t ptsUs, bool forceIdr, const Sink& sink) {
     if (pendingInputs_ == 0 && !pumpEvents(sink, 100, false)) return false;
     if (pendingInputs_ == 0) return true; // encodeur occupé : l'image est sautée, pas la session
-    if (!convertFrame()) return false;
+    const int slot = nextSlot_;
+    nextSlot_ = (nextSlot_ + 1) % kSlots;
+    if (!convertFrame(slot)) return false;
 
-    ComPtr<IMFMediaBuffer> buffer;
-    HRESULT hr = MFCreateDXGISurfaceBuffer(__uuidof(ID3D11Texture2D), nv12_.Get(), 0, FALSE, &buffer);
-    if (FAILED(hr)) return fail("tampon d'image", hr);
-    ComPtr<IMF2DBuffer> buffer2d;
-    DWORD length = 0;
-    if (SUCCEEDED(buffer.As(&buffer2d))) buffer2d->GetContiguousLength(&length);
-    buffer->SetCurrentLength(length);
-
-    ComPtr<IMFSample> sample;
-    MFCreateSample(&sample);
-    sample->AddBuffer(buffer.Get());
+    IMFSample* sample = inputSamples_[slot].Get();
+    // Les attributs de l'image précédente (image clé forcée...) ne doivent pas rester.
+    sample->DeleteAllItems();
     sample->SetSampleTime(static_cast<LONGLONG>(ptsUs) * 10);
     sample->SetSampleDuration(10'000'000 / cfg_.fps);
 
     if (forceIdr && codec_) setCodecValue(codec_.Get(), CODECAPI_AVEncVideoForceKeyFrame, 1);
-    hr = transform_->ProcessInput(inputStream_, sample.Get(), 0);
+    const HRESULT hr = transform_->ProcessInput(inputStream_, sample, 0);
     if (FAILED(hr)) return fail("entrée de l'encodeur", hr);
     --pendingInputs_;
     return pumpEvents(sink, 30, true);

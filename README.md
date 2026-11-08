@@ -38,24 +38,30 @@ Sur la tablette, **glissez depuis le bord gauche vers le centre** pour ouvrir le
 | Réglage | Effet |
 |---|---|
 | **Sortie son** | PC ou tablette. Sur la tablette, le son du PC est coupé |
-| **Clavier** | Ouvre le clavier à l'écran. Un clavier branché à l'appareil fonctionne aussi |
+| **Clavier** | Ouvre le clavier à l'écran. Un clavier branché à l'appareil fonctionne aussi, raccourcis et touches F1 à F12 compris |
 | **Étendu** | La tablette prolonge le bureau |
 | **Dupliquer** | La tablette montre l'écran principal du PC |
 | **Tablette seule** | L'écran du PC s'éteint. Il revient seul environ 15 s après une déconnexion |
-| **Fréquence** | 60 ou 120 Hz |
+| **Fréquence** | 60, 120 ou 144 Hz selon l'appareil |
 | **Rotation** | Automatique ou verrouillée |
 | **Tactile** | Se coupe pour dessiner au stylet sans que la paume clique |
 | **Touche Windows, Afficher le bureau** | Raccourcis Windows |
 | **Déconnecter** | Ferme l'application et retire le moniteur |
 
+La touche Retour referme le menu ; deux appuis rapprochés ferment l'application.
+
 - **Menu Démarrer :** l'icône 36Screenlink relance le service si besoin. Il démarre déjà avec Windows.
 - **Quitter :** clic droit sur l'icône près de l'horloge, puis *Quitter*. L'application reste fermée jusqu'à l'icône du menu Démarrer ou au prochain démarrage de Windows.
 - **Barre des tâches de la tablette :** en mode Étendu, une fenêtre activée d'une touche sur la tablette y vient, même si elle était sur l'écran principal. Elle y reste, jusqu'à ce que vous la déplaciez.
 - **Son depuis le PC :** clic droit sur l'icône près de l'horloge.
+- **Clavier branché à l'appareil :** Android garde pour lui la touche Windows et Alt+Tab. Utilisez Ctrl+Échap pour le menu Démarrer, Alt+² (la touche sous Échap) pour Alt+Tab, ou la tuile Windows du menu.
+- **Souris branchée à l'appareil :** déplacement, clic droit, clic du milieu et molettes arrivent dans Windows.
+- **Veille :** tant que la tablette est connectée, les écrans du PC ne se mettent pas en veille, sinon Windows cesserait de dessiner l'écran étendu. Le verrouillage automatique de session attend donc lui aussi la déconnexion.
 - **Rotation :** l'écran Windows suit l'appareil, avec une coupure d'environ une seconde.
 - **Résolution :** le mode le plus proche de l'appareil est choisi, jusqu'à 120 Hz. Sans mode identique, l'image a des bandes noires.
-- **Déconnexion :** le moniteur disparaît après 10 s, et Windows récupère les fenêtres.
-- **Nouveau PC :** dans l'application, touchez *Nouvel appairage*, puis lancez 36Screenlink sur le PC.
+- **Déconnexion :** le moniteur disparaît après 10 à 15 s, et Windows récupère les fenêtres.
+- **Batterie :** en flux, la tablette consomme plus que ce qu'un port USB ordinaire lui fournit, environ 6 % par heure mesurés. Pour une longue session, branchez-la à un port USB-C PD ou à son chargeur.
+- **Nouveau PC :** dans l'application, touchez *Nouvel appairage*, puis lancez 36Screenlink sur le PC. *Oublier ce PC* efface la clé d'appairage de la tablette.
 
 ## Version portable
 
@@ -76,6 +82,8 @@ Sans droits administrateur, l'écran étendu est impossible. N'utilisez pas le p
 
 **Validation UAC et déverrouillage depuis la tablette :** décoché par défaut. Avec cette option, toute personne tenant l'appareil, application ouverte, peut valider une invite UAC et agir sur le PC verrouillé. Protégez l'appareil par un code.
 
+Avec cette option, la tablette demande d'abord son code, son empreinte ou son visage : sans cette confirmation, le PC ignore toute saisie sur l'UAC ou l'écran verrouillé.
+
 Sans cette option, l'écran de verrouillage et les invites UAC restent sur le PC.
 
 ## Désinstallation
@@ -87,7 +95,7 @@ Paramètres Windows > Applications > 36Screenlink > Désinstaller. Le pilote, le
 Prérequis : Visual Studio 2022 ou Build Tools avec C++, Windows SDK 10.0.26100, Android SDK, JDK 17 et Inno Setup 6. Une APK finale exige un `android/keystore.properties` à vous, jamais versionné, avec `storeFile`, `storePassword`, `keyAlias` et `keyPassword`.
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File windows/build-release.ps1 -Version 1.5.0
+powershell -ExecutionPolicy Bypass -File windows/build-release.ps1 -Version 1.6.0
 ```
 
 Le résultat se trouve dans `dist/release`.
@@ -96,11 +104,15 @@ Le résultat se trouve dans `dist/release`.
 
 - Flux chiffré en AES-256-GCM, avec authentification mutuelle.
 - La clé naît d'un échange ECDH, confirmé par un code des deux côtés. Elle n'est jamais transmise.
+- Chaque session ajoute un ECDH éphémère : une clé volée plus tard ne déchiffre pas une session enregistrée.
+- Des connexions muettes d'un autre appareil du réseau ne bloquent plus la tablette, et un message malformé est ignoré.
 - Elle est protégée par DPAPI sous Windows et Android Keystore sur l'appareil, dans un dossier réservé à SYSTEM et aux administrateurs.
 - Le pilote est signé par un certificat créé sur votre PC, dont la clé privée est détruite aussitôt. Aucun certificat commun n'est distribué.
 - Un appareil déjà appairé refuse un nouveau PC tant que vous ne touchez pas *Nouvel appairage*.
 
-Le service fonctionne sous le compte SYSTEM. Signalez les failles par un message privé plutôt que par un ticket public.
+Le service fonctionne sous le compte SYSTEM. Un administrateur du PC peut lire la clé d'appairage, comme tout secret stocké sur la machine. Signalez les failles par un message privé plutôt que par un ticket public.
+
+Ce qui est diffusé, et ce qui ne l'est pas : voir [CONFIDENTIALITE.md](CONFIDENTIALITE.md).
 
 ## Licence
 
