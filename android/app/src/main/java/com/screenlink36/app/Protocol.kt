@@ -37,6 +37,14 @@ object Protocol {
     const val MSG_SECURE_STATE = 20
     const val MSG_SECURE_ARMED = 21
     const val MSG_MOUSE = 22
+    // Ajoutés sans changer de version : un ancien agent ou une ancienne application les ignore.
+    const val MSG_KEYBOARD_STATE = 23
+    const val MSG_TEXT_FOCUS = 24
+    const val MSG_SCREENS = 25
+    const val MSG_WINDOW_MOVE = 26
+
+    const val KEYBOARD_VISIBLE = 1
+    const val KEYBOARD_AUTO = 2
 
     const val KEY_VIRTUAL = 0x8000
 

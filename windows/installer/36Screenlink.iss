@@ -1,6 +1,6 @@
 ﻿; Installateur de 36Screenlink : un seul fichier, une seule validation administrateur.
 #ifndef Version
-  #define Version "1.6.1"
+  #define Version "1.7.0"
 #endif
 #define Root "..\.."
 #define PlatformToolsUrl "https://dl.google.com/android/repository/platform-tools_r37.0.1-win.zip"

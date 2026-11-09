@@ -31,6 +31,7 @@
 #include "protocol.h"
 #include "store.h"
 #include "tray.h"
+#include "device_helper.h"
 #include "window_follow.h"
 
 #pragma comment(lib, "winmm.lib")
@@ -335,6 +336,9 @@ std::unique_ptr<Encoder> openEncoder(const Options& opt, UINT vendorId, ID3D11De
     return nullptr;
 }
 
+// Identifiant de contact réservé à la touche simulée sur une icône de la barre des tâches.
+constexpr uint8_t kWindowMoveContact = 200;
+
 struct SessionStats {
     std::atomic<uint32_t> tabletFrames{0}, tabletAvgLat{0}, tabletP95Lat{0}, tabletAvgDec{0}, tabletDrops{0};
     std::atomic<bool> requestIdr{false};
@@ -344,7 +348,7 @@ struct SessionStats {
     std::atomic<int64_t> lastPongUs{0};
 };
 
-void receiverLoop(SecureChannel& ch, TouchInjector& touch, KeyInjector& keys, PenInjector& pen, MouseInjector& mouse, WindowFollower& follower, SessionStats& stats, std::atomic<bool>& alive) {
+void receiverLoop(SecureChannel& ch, TouchInjector& touch, KeyInjector& keys, PenInjector& pen, MouseInjector& mouse, WindowFollower& follower, DeviceHelper& helper, SessionStats& stats, std::atomic<bool>& alive) {
     if (gSecureMode) attachInputDesktop();
     std::vector<uint8_t> msg;
     int64_t bestRtt = INT64_MAX;
@@ -442,6 +446,22 @@ void receiverLoop(SecureChannel& ch, TouchInjector& touch, KeyInjector& keys, Pe
             m.wheelH = static_cast<int16_t>(r.u16());
             mouse.apply(m);
             follower.onContact(m.buttons != 0);
+            break;
+        }
+        case proto::kKeyboardState:
+            helper.setKeyboardFlags(r.u8());
+            break;
+        case proto::kWindowMove: {
+            if (!inputAllowed || !r.has(5)) break;
+            const uint16_t x = r.u16(), y = r.u16();
+            const auto screen = helper.screen(r.u8());
+            if (!screen) break;
+            // Une touche sur l'icône active la fenêtre, ou montre ses miniatures : la fenêtre
+            // choisie part alors sur l'écran voulu.
+            follower.sendTo(*screen);
+            touch.apply({Contact{kWindowMoveContact, true, x, y}});
+            Sleep(60);
+            touch.apply({Contact{kWindowMoveContact, false, x, y}});
             break;
         }
         case proto::kText:
@@ -646,7 +666,10 @@ bool runSession(const Options& opt, const std::string& host) {
     stats.lastPongUs = static_cast<int64_t>(nowUs());
     stats.secureDesktop = secureDesktop;
     std::atomic<bool> alive{true};
-    std::thread receiver(receiverLoop, std::ref(ch), std::ref(touch), std::ref(keys), std::ref(pen), std::ref(mouse), std::ref(follower), std::ref(stats), std::ref(alive));
+    // Écrans, barre des tâches et champ de saisie : de quoi aider la saisie sur l'appareil.
+    DeviceHelper helper;
+    helper.start(ch, output->desktop, follower.running() && !secureDesktop);
+    std::thread receiver(receiverLoop, std::ref(ch), std::ref(touch), std::ref(keys), std::ref(pen), std::ref(mouse), std::ref(follower), std::ref(helper), std::ref(stats), std::ref(alive));
     // Session en Wi-Fi alors que le câble est branché : on repasse par l'USB, plus stable.
     std::atomic<bool> usbAvailable{false};
     std::thread usbWatcher([&] {

@@ -13,6 +13,7 @@ add_executable(ScreenlinkAgent
     agent/src/channel.cpp
     agent/src/crypto.cpp
     agent/src/desktop.cpp
+    agent/src/device_helper.cpp
     agent/src/discovery.cpp
     agent/src/encoder_mf.cpp
     agent/src/encoder_nvenc.cpp

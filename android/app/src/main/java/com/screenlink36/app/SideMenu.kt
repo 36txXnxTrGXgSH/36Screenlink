@@ -48,6 +48,7 @@ class SideMenu(
         fun onFrameRate(fps: Int)
         fun onOrientation(choice: Int)
         fun onTouchToggle()
+        fun onAutoKeyboardToggle()
         fun onWindowsKey()
         fun onShowDesktop()
         fun onDisconnect()
@@ -93,6 +94,7 @@ class SideMenu(
         actions.onOrientation(it)
     }
     private val touchRow = Setting(appContext, R.drawable.ms_touch_app, "Tactile") { actions.onTouchToggle() }
+    private val autoKeyboardRow = Setting(appContext, R.drawable.ms_keyboard, "Clavier auto") { actions.onAutoKeyboardToggle() }
     private val stats = TextView(appContext).apply {
         setTextColor(SECONDARY_COLOR)
         textSize = 12f
@@ -122,6 +124,7 @@ class SideMenu(
         list.addView(LinearLayout(appContext).apply {
             orientation = LinearLayout.VERTICAL
             addView(touchRow.view)
+            addView(autoKeyboardRow.view)
         }, block(GAP_DP))
         list.addView(LinearLayout(appContext).apply {
             addView(tile(R.drawable.ms_keyboard, "Clavier") {
@@ -219,7 +222,7 @@ class SideMenu(
         }, LinearLayout.LayoutParams(WRAP, dp(40)))
     }
 
-    fun update(audioOnTablet: Boolean, displayMode: Int, fps: Int, orientationChoice: Int, touchEnabled: Boolean) {
+    fun update(audioOnTablet: Boolean, displayMode: Int, fps: Int, orientationChoice: Int, touchEnabled: Boolean, autoKeyboard: Boolean) {
         this.audioOnTablet = audioOnTablet
         frameRate = fps
         audio.select(if (audioOnTablet) 1 else 0)
@@ -227,6 +230,7 @@ class SideMenu(
         rate.select(frameRates.indexOf(fps))
         orientation.select(orientationChoice)
         touchRow.set(touchEnabled, if (touchEnabled) "Activé" else "Coupé")
+        autoKeyboardRow.set(autoKeyboard, if (autoKeyboard) "Activé" else "Coupé")
     }
 
     fun updateLink(usb: Boolean) {

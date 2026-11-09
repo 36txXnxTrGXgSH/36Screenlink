@@ -13,6 +13,8 @@ namespace {
 constexpr uint64_t kTapMaxMs = 600;     // au-delà, c'est un glissement
 constexpr uint64_t kAfterTapMs = 1500;  // délai laissé à Windows pour activer la fenêtre
 constexpr DWORD kPollMs = 30;
+// Assez long pour choisir une miniature quand l'application a plusieurs fenêtres.
+constexpr uint64_t kSendWindowMs = 8000;
 
 bool isShellWindow(HWND hwnd) {
     wchar_t name[64] = {};
@@ -34,7 +36,7 @@ bool isMovable(HWND hwnd) {
     return cloaked == 0;
 }
 
-bool moveToTablet(HWND hwnd, HMONITOR tablet) {
+bool moveToScreen(HWND hwnd, HMONITOR tablet) {
     MONITORINFO info{sizeof(info)};
     if (!GetMonitorInfoW(tablet, &info)) return false;
     if (IsIconic(hwnd)) ShowWindow(hwnd, SW_RESTORE);
@@ -76,29 +78,49 @@ void WindowFollower::onContact(bool down) {
     held_ = down;
 }
 
+void WindowFollower::sendTo(const RECT& screen) {
+    {
+        std::lock_guard<std::mutex> lock(sendMutex_);
+        sendScreen_ = screen;
+    }
+    tapMs_ = GetTickCount64();
+    sendUntilMs_ = GetTickCount64() + kSendWindowMs;
+}
+
 void WindowFollower::run() {
     if (gSecureMode) attachInputDesktop();
     const HMONITOR tablet = MonitorFromRect(&tablet_, MONITOR_DEFAULTTONEAREST);
-    const auto elsewhere = [tablet](HWND hwnd) { return MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) != tablet; };
     HWND previous = nullptr;
 
     for (; running_; Sleep(kPollMs)) {
         const HWND foreground = GetForegroundWindow();
         if (held_ || !foreground) continue;
-        if (GetTickCount64() - tapMs_ > kAfterTapMs) {
+        const uint64_t now = GetTickCount64();
+        const bool sending = now < sendUntilMs_;
+        if (!sending && now - tapMs_ > kAfterTapMs) {
             previous = foreground;
             continue;
         }
+        HMONITOR destination = tablet;
+        if (sending) {
+            std::lock_guard<std::mutex> lock(sendMutex_);
+            destination = MonitorFromRect(&sendScreen_, MONITOR_DEFAULTTONEAREST);
+        }
+        const auto away = [destination](HWND hwnd) { return MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) != destination; };
         // Barre des tâches touchée alors que la fenêtre était déjà active : Windows la réduit.
-        // L'utilisateur voulait la voir, on la rouvre sur la tablette.
+        // L'utilisateur voulait la voir, on la rouvre à l'endroit voulu. Envoyée exprès sur un
+        // écran, elle est rouverte même si elle y était déjà.
         HWND target = nullptr;
-        if (previous && IsIconic(previous) && isMovable(previous) && elsewhere(previous)) target = previous;
-        else if (foreground != previous && isMovable(foreground) && elsewhere(foreground)) target = foreground;
+        if (previous && IsIconic(previous) && isMovable(previous) && (sending || away(previous))) target = previous;
+        else if (foreground != previous && isMovable(foreground) && (sending || away(foreground))) target = foreground;
         if (!target) continue;
 
-        const bool moved = moveToTablet(target, tablet);
-        if (target != foreground) SetForegroundWindow(target);
-        std::printf("Fenêtre amenée sur la tablette : %s\n", moved ? "oui" : "non");
+        bool moved = true;
+        if (away(target)) moved = moveToScreen(target, destination);
+        else if (IsIconic(target)) ShowWindow(target, SW_RESTORE);
+        if (target != GetForegroundWindow()) SetForegroundWindow(target);
+        std::printf(sending ? "Fenêtre envoyée sur l'écran choisi : %s\n" : "Fenêtre amenée sur la tablette : %s\n", moved ? "oui" : "non");
         previous = target;
+        sendUntilMs_ = 0;
     }
 }

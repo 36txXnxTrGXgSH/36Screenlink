@@ -82,6 +82,14 @@ Nonce de 12 octets : 4 octets nuls, puis compteur 64 bits propre à chaque sens.
 | 21 | SECURE_ARMED | T→PC | vide : identité confirmée sur la tablette, la saisie est acceptée sur l'écran sécurisé |
 | 22 | MOUSE | T→PC | u8 boutons (1 gauche, 2 droit, 4 milieu), u16 x, u16 y, i16 molette verticale, i16 horizontale (crans de 120) |
 | 14 | PEN | T→PC | u8 état (1 portée, 2 contact, 4 bouton, 8 gomme), u16 x, u16 y, u16 pression 0..1024, i8 tiltX, i8 tiltY, u16 rotation |
+| 23 | KEYBOARD_STATE | T→PC | u8 drapeaux (1 clavier à l'écran affiché, 2 ouverture automatique) ; le PC ne suit le focus que si l'un des deux est actif |
+| 24 | TEXT_FOCUS | PC→T | u8 1 si un champ de saisie modifiable a le focus sur l'écran de l'appareil, u16 x, y, w, h du curseur ou du champ (0..65535) |
+| 25 | SCREENS | PC→T | u8 n, u8 index de l'appareil, n × (i16 x, i16 y, u16 w, u16 h) en pixels du bureau, puis la barre des tâches de l'appareil u16 x, y, w, h (0..65535). n = 0 quand le glisser d'icône n'a pas de sens |
+| 26 | WINDOW_MOVE | T→PC | u16 x, u16 y de l'icône touchée (0..65535), u8 index de l'écran choisi |
+
+Les messages 23 à 26 ont été ajoutés sans changer de version : une ancienne application ou un ancien agent les ignore, et le reste fonctionne.
+
+Le PC numérote les écrans ainsi : l'écran principal d'abord, puis de gauche à droite. Il envoie SCREENS au début de la session et à chaque changement, au plus une fois par seconde. Pour WINDOW_MOVE, il simule une touche sur l'icône. La fenêtre qui s'active ensuite part sur l'écran choisi, y compris celle choisie dans les miniatures, pendant 8 s.
 
 À un changement de taille d'écran (orientation), la tablette ferme la session ; un clavier branché ou le mode sombre ne la coupent plus. Le PC se reconnecte et lit la nouvelle orientation dans HELLO : hauteur supérieure à la largeur signifie portrait.
 

@@ -53,6 +53,7 @@ Sur l'appareil, **glissez depuis le bord gauche vers le centre** pour ouvrir le 
 | **Fréquence** | 60, 120 ou 144 Hz selon l'appareil |
 | **Orientation** | Auto (suit l'appareil), Paysage ou Portrait, gardé d'une fois sur l'autre. Paysage par défaut sur un téléphone |
 | **Tactile** | Se coupe pour dessiner au stylet sans que la paume clique |
+| **Clavier auto** | Coupé par défaut. Activé, le clavier à l'écran s'ouvre quand vous touchez un champ où écrire dans Windows, et se referme quand vous en sortez |
 | **Touche Windows, Afficher le bureau** | Raccourcis Windows |
 | **Déconnecter** | Ferme l'application et retire le moniteur |
 
@@ -61,6 +62,8 @@ La touche Retour referme le menu ; deux appuis rapprochés ferment l'application
 - **Menu Démarrer :** l'icône 36Screenlink relance le service si besoin. Il démarre déjà avec Windows.
 - **Quitter :** clic droit sur l'icône près de l'horloge, puis *Quitter*. L'application reste fermée jusqu'à l'icône du menu Démarrer ou au prochain démarrage de Windows.
 - **Barre des tâches de l'appareil :** en mode Étendu, une fenêtre activée d'une touche sur l'appareil y vient, même si elle était sur l'écran principal. Elle y reste, jusqu'à ce que vous la déplaciez.
+- **Envoyer une fenêtre sur un écran :** dans la barre des tâches de l'appareil, posez le doigt sur l'icône d'une application ouverte et glissez vers le haut. Un rectangle numéroté s'affiche pour chaque écran du PC : lâchez l'icône sur celui voulu. Si l'application a plusieurs fenêtres, touchez ensuite la miniature voulue. L'appui long sur l'icône ouvre toujours sa liste de raccourcis.
+- **Clavier à l'écran :** quand il couvre le champ où vous écrivez, l'image de Windows remonte pour le garder visible, puis redescend à la fermeture du clavier.
 - **Son depuis le PC :** clic droit sur l'icône près de l'horloge.
 - **Clavier branché à l'appareil :** Android garde pour lui la touche Windows et Alt+Tab. Utilisez Ctrl+Échap pour le menu Démarrer, Alt+² (la touche sous Échap) pour Alt+Tab, ou la tuile Windows du menu.
 - **Souris branchée à l'appareil :** déplacement, clic droit, clic du milieu et molettes arrivent dans Windows.
@@ -103,7 +106,7 @@ Paramètres Windows > Applications > 36Screenlink > Désinstaller. Le pilote, le
 Prérequis : Visual Studio 2022 ou Build Tools avec C++, Windows SDK 10.0.26100, Android SDK, JDK 17 et Inno Setup 6. Une APK finale exige un `android/keystore.properties` à vous, jamais versionné, avec `storeFile`, `storePassword`, `keyAlias` et `keyPassword`.
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File windows/build-release.ps1 -Version 1.6.1
+powershell -ExecutionPolicy Bypass -File windows/build-release.ps1 -Version 1.7.0
 ```
 
 Le résultat se trouve dans `dist/release`.

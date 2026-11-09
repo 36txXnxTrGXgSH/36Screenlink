@@ -40,7 +40,15 @@ enum Msg : uint8_t {
     kSecureState = 20, // A->T u8 1 si l'écran montré est l'UAC ou le verrouillage
     kSecureArmed = 21, // T->A vide : l'utilisateur a confirmé son identité sur la tablette
     kMouse = 22,       // T->A u8 boutons (1 gauche, 2 droit, 4 milieu), u16 x, u16 y, i16 molette verticale, i16 horizontale
+    // Messages ajoutés sans changer de version : un ancien agent ou une ancienne application les ignore.
+    kKeyboardState = 23, // T->A u8 drapeaux (1 clavier à l'écran affiché, 2 ouverture automatique)
+    kTextFocus = 24,   // A->T u8 1 si un champ de saisie a le focus sur cet écran, u16 x, y, w, h (0..65535)
+    kScreens = 25,     // A->T u8 n, u8 index de l'appareil, n * (i16 x, i16 y, u16 w, u16 h) en pixels du bureau,
+                       //      puis barre des tâches de l'appareil u16 x, y, w, h (0..65535, w = 0 si aucune)
+    kWindowMove = 26,  // T->A u16 x, u16 y de l'icône touchée (0..65535), u8 index de l'écran voulu
 };
+
+enum KeyboardFlags : uint8_t { kKeyboardVisible = 1, kKeyboardAuto = 2 };
 
 enum Control : uint8_t { kControlDisplay = 1, kControlFps = 2 };
 enum DisplayMode : uint8_t { kDisplayExtended = 0, kDisplayDuplicate = 1, kDisplayTabletOnly = 2 };

@@ -55,7 +55,27 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamServer.Ui {
     private var touchEnabled = true
     private var edgeSwipeStart = -1f
     private var edgeSwipeActive = false
-    private var softKeyboardOpen = false
+    // Clavier à l'écran : son état réel vient d'Android, pas d'un interrupteur interne qui
+    // se désynchronise quand l'utilisateur le ferme par Retour.
+    private var imeVisible = false
+    private var imeHeight = 0
+    private var autoKeyboard = false
+    private var autoOpened = false
+    private var textFocus: Rect? = null
+    // Écrans du PC et barre des tâches de l'appareil, pour envoyer une fenêtre d'un écran à l'autre.
+    private var screens: List<Rect> = emptyList()
+    private var deviceScreen = 0
+    private var taskbar: Rect? = null
+    private var dragState = DRAG_IDLE
+    private var dragDown: MotionEvent? = null
+    private val dragLongPress = Runnable { if (dragState == DRAG_PENDING) passDrag() }
+    private val reopenKeyboard = Runnable {
+        if (autoKeyboard && textFocus != null && !imeVisible && !menu.isOpen && !secureScreen && streamWidth > 0) {
+            showKeyboard()
+            autoOpened = true
+        }
+    }
+    private lateinit var picker: ScreenPicker
     private var server: StreamServer? = null
     private var streamWidth = 0
     private var streamHeight = 0
@@ -86,7 +106,15 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamServer.Ui {
                     if (event.actionMasked == MotionEvent.ACTION_DOWN) video.requestUnbufferedDispatch(event)
                     sendPen(event)
                 }
-                else -> sendTouch(event)
+                else -> {
+                    if (!taskbarGesture(event)) sendTouch(event)
+                    // Toucher un champ qui a déjà le focus rouvre aussi le clavier : le PC ne
+                    // signale que les changements de focus, on regarde donc peu après la touche.
+                    if (event.actionMasked == MotionEvent.ACTION_UP && autoKeyboard) {
+                        video.removeCallbacks(reopenKeyboard)
+                        video.postDelayed(reopenKeyboard, REOPEN_DELAY_MS)
+                    }
+                }
             }
             true
         }
@@ -115,9 +143,12 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamServer.Ui {
         root.addView(status, FrameLayout.LayoutParams(MATCH, WRAP, Gravity.CENTER))
         softTarget = SoftKeyboardTarget(this) { server?.sendInput(it) }
         root.addView(softTarget, FrameLayout.LayoutParams(1, 1))
+        picker = ScreenPicker(this)
+        root.addView(picker, FrameLayout.LayoutParams(MATCH, MATCH))
         val buttonSize = (56 * resources.displayMetrics.density).toInt()
         val maxRate = display.supportedModes.maxOf { it.refreshRate }.toInt()
         menu = SideMenu(this, video, menuActions, listOf(60, 120, 144).filter { it <= maxRate + 1 }, deviceName())
+        autoKeyboard = getSharedPreferences("app", MODE_PRIVATE).getBoolean("auto_keyboard", false)
         orientationChoice = getSharedPreferences("app", MODE_PRIVATE).getInt("orientation",
             if (isPhone()) SideMenu.ORIENTATION_LANDSCAPE else SideMenu.ORIENTATION_AUTO)
         applyOrientation()
@@ -154,8 +185,13 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamServer.Ui {
             setOnClickListener { confirmIdentity() }
         }
         root.addView(secureNotice, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.CENTER))
-        window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING)
+        // ADJUST_RESIZE pour recevoir la hauteur du clavier : la fenêtre, elle, ne change pas de taille.
+        window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
         setContentView(root)
+        root.setOnApplyWindowInsetsListener { _, insets ->
+            onKeyboardInsets(insets)
+            insets
+        }
         root.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
             applyAspect()
             reserveLeftEdge()
@@ -243,6 +279,13 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamServer.Ui {
             refreshMenu()
         }
 
+        override fun onAutoKeyboardToggle() {
+            autoKeyboard = !autoKeyboard
+            getSharedPreferences("app", MODE_PRIVATE).edit().putBoolean("auto_keyboard", autoKeyboard).apply()
+            server?.sendKeyboardState(imeVisible, autoKeyboard)
+            refreshMenu()
+        }
+
         override fun onTouchToggle() {
             touchEnabled = !touchEnabled
             refreshMenu()
@@ -265,7 +308,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamServer.Ui {
         codes.reversed().forEach { s.sendInput(Keyboard.keyMessage(false, it)) }
     }
 
-    private fun refreshMenu() = menu.update(audioOnTablet, displayMode, frameRate, orientationChoice, touchEnabled)
+    private fun refreshMenu() = menu.update(audioOnTablet, displayMode, frameRate, orientationChoice, touchEnabled, autoKeyboard)
 
     // Un téléphone sert d'écran posé à l'horizontale : paysage par défaut, même si la rotation
     // automatique d'Android est coupée. « Auto » suit, lui, le réglage du téléphone.
@@ -348,6 +391,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamServer.Ui {
 
     override fun onWaiting(message: String) = runOnUiThread {
         streamWidth = 0
+        screens = emptyList()
+        taskbar = null
+        textFocus = null
+        endDrag()
+        updatePan()
         // Sans PC, l'écran de la tablette peut s'éteindre normalement.
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         video.visibility = View.VISIBLE
@@ -364,6 +412,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamServer.Ui {
         status.visibility = View.GONE
         waitingButtons.visibility = View.GONE
         applyAspect()
+        server?.sendKeyboardState(imeVisible, autoKeyboard)
     }
 
     // Conserve les proportions du flux : marges noires si elles diffèrent de l'écran.
@@ -397,6 +446,27 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamServer.Ui {
 
     override fun onStats(fps: Int, latencyMs: Int) = runOnUiThread {
         menu.updateStats(fps, latencyMs)
+    }
+
+    override fun onTextFocus(area: Rect?) = runOnUiThread {
+        val had = textFocus != null
+        textFocus = area
+        if (autoKeyboard && streamWidth > 0) {
+            if (area != null && !had && !imeVisible && !menu.isOpen && !secureScreen) {
+                showKeyboard()
+                autoOpened = true
+            } else if (area == null && had && autoOpened && imeVisible) {
+                hideKeyboard()
+                autoOpened = false
+            }
+        }
+        updatePan()
+    }
+
+    override fun onScreens(screens: List<Rect>, device: Int, taskbar: Rect?) = runOnUiThread {
+        this.screens = screens
+        deviceScreen = device
+        this.taskbar = taskbar
     }
 
     override fun onSecureScreen(active: Boolean) = runOnUiThread {
@@ -605,14 +675,136 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamServer.Ui {
     }
 
     private fun toggleSoftKeyboard() {
-        val ime = getSystemService(InputMethodManager::class.java)
-        softKeyboardOpen = !softKeyboardOpen
-        if (softKeyboardOpen) {
-            softTarget.requestFocus()
-            ime.showSoftInput(softTarget, 0)
-        } else {
-            ime.hideSoftInputFromWindow(softTarget.windowToken, 0)
+        autoOpened = false
+        if (imeVisible) hideKeyboard() else showKeyboard()
+    }
+
+    private fun showKeyboard() {
+        softTarget.requestFocus()
+        window.insetsController?.show(WindowInsets.Type.ime())
+        getSystemService(InputMethodManager::class.java).showSoftInput(softTarget, 0)
+    }
+
+    private fun hideKeyboard() {
+        window.insetsController?.hide(WindowInsets.Type.ime())
+        getSystemService(InputMethodManager::class.java).hideSoftInputFromWindow(softTarget.windowToken, 0)
+    }
+
+    private fun onKeyboardInsets(insets: WindowInsets) {
+        val visible = insets.isVisible(WindowInsets.Type.ime())
+        imeHeight = if (visible) insets.getInsets(WindowInsets.Type.ime()).bottom else 0
+        if (visible != imeVisible) {
+            imeVisible = visible
+            if (!visible) autoOpened = false
+            server?.sendKeyboardState(visible, autoKeyboard)
         }
+        updatePan()
+    }
+
+    // Le clavier couvre le bas de l'écran : l'image de Windows remonte juste assez pour que le
+    // champ où l'on écrit reste visible au-dessus, et redescend quand le clavier se ferme.
+    private fun updatePan() {
+        val area = textFocus
+        var shift = 0f
+        if (imeVisible && imeHeight > 0 && area != null && video.height > 0) {
+            val fieldBottom = video.top + area.bottom.toFloat() / MAX_COORD * video.height
+            val visibleBottom = root.height - imeHeight - PAN_MARGIN_DP * resources.displayMetrics.density
+            shift = (fieldBottom - visibleBottom).coerceIn(0f, imeHeight.toFloat())
+        }
+        if (video.translationY != -shift) {
+            video.translationY = -shift
+            placeCursor()
+        }
+    }
+
+    private fun canMoveWindows() = screens.size >= 2 && taskbar != null && touchEnabled && !secureScreen && streamWidth > 0
+
+    private fun inTaskbar(x: Float, y: Float): Boolean {
+        val t = taskbar ?: return false
+        val nx = x / video.width * MAX_COORD
+        val ny = y / video.height * MAX_COORD
+        return nx >= t.left && nx <= t.right && ny >= t.top && ny <= t.bottom
+    }
+
+    /**
+     * Doigt posé sur la barre des tâches de Windows : rien ne part tant que le geste n'est pas
+     * tranché. Vers le haut, le choix d'écran s'affiche ; sinon (touche brève, appui long,
+     * glissement de côté) le geste est rejoué tel quel pour Windows.
+     */
+    private fun taskbarGesture(event: MotionEvent): Boolean {
+        val slop = DRAG_SLOP_DP * resources.displayMetrics.density
+        when (dragState) {
+            DRAG_IDLE -> {
+                if (event.actionMasked != MotionEvent.ACTION_DOWN || !canMoveWindows() || !inTaskbar(event.x, event.y)) return false
+                dragDown = MotionEvent.obtain(event)
+                dragState = DRAG_PENDING
+                video.postDelayed(dragLongPress, LONG_PRESS_MS)
+            }
+            DRAG_PENDING -> {
+                val down = dragDown ?: return false
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_MOVE -> {
+                        val up = down.y - event.y
+                        val side = kotlin.math.abs(event.x - down.x)
+                        if (up > slop && up > side) {
+                            video.removeCallbacks(dragLongPress)
+                            dragState = DRAG_ACTIVE
+                            picker.show(screens, deviceScreen, if (isPhone()) "Ce téléphone" else "Cette tablette")
+                            picker.track(event.x + video.x, event.y + video.y)
+                        } else if (side > slop || -up > slop) {
+                            passDrag()
+                            sendTouch(event)
+                        }
+                    }
+                    MotionEvent.ACTION_UP -> {
+                        // Touche brève : Windows la reçoit comme avant.
+                        sendTouch(down)
+                        sendTouch(event)
+                        endDrag()
+                    }
+                    MotionEvent.ACTION_CANCEL -> endDrag()
+                    else -> {
+                        passDrag()
+                        sendTouch(event)
+                    }
+                }
+            }
+            DRAG_ACTIVE -> when (event.actionMasked) {
+                MotionEvent.ACTION_MOVE -> picker.track(event.x + video.x, event.y + video.y)
+                MotionEvent.ACTION_UP -> {
+                    picker.track(event.x + video.x, event.y + video.y)
+                    val target = picker.picked
+                    val down = dragDown
+                    if (target >= 0 && down != null) {
+                        val x = (down.x / video.width * MAX_COORD).toInt().coerceIn(0, MAX_COORD)
+                        val y = (down.y / video.height * MAX_COORD).toInt().coerceIn(0, MAX_COORD)
+                        server?.sendWindowMove(x, y, target)
+                    }
+                    endDrag()
+                }
+                MotionEvent.ACTION_CANCEL -> endDrag()
+            }
+            else -> {
+                sendTouch(event)
+                if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) endDrag()
+            }
+        }
+        return true
+    }
+
+    // Appui long ou geste ordinaire : Windows reçoit l'appui retenu, puis la suite.
+    private fun passDrag() {
+        video.removeCallbacks(dragLongPress)
+        dragDown?.let { sendTouch(it) }
+        dragState = DRAG_PASS
+    }
+
+    private fun endDrag() {
+        video.removeCallbacks(dragLongPress)
+        picker.hide()
+        dragDown?.recycle()
+        dragDown = null
+        dragState = DRAG_IDLE
     }
 
     private fun localAddress(): String = NetworkInterface.getNetworkInterfaces().asSequence()
@@ -634,5 +826,13 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamServer.Ui {
         private const val WHEEL_DELTA = 120
         private const val BACK_CONFIRM_MS = 2000L
         private const val KEY_D = 0x20
+        private const val PAN_MARGIN_DP = 24
+        private const val REOPEN_DELAY_MS = 500L
+        private const val DRAG_SLOP_DP = 24
+        private const val LONG_PRESS_MS = 450L
+        private const val DRAG_IDLE = 0
+        private const val DRAG_PENDING = 1
+        private const val DRAG_ACTIVE = 2
+        private const val DRAG_PASS = 3
     }
 }

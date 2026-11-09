@@ -50,6 +50,10 @@ class StreamServer(
         fun onStats(fps: Int, latencyMs: Int)
         /** Le PC montre l'UAC ou l'écran de verrouillage : la saisie attend une confirmation. */
         fun onSecureScreen(active: Boolean)
+        /** Champ de saisie qui a le focus sur cet écran, en 0..65535 ; null s'il n'y en a pas. */
+        fun onTextFocus(area: android.graphics.Rect?)
+        /** Écrans du PC en pixels du bureau, index de l'appareil et sa barre des tâches en 0..65535. */
+        fun onScreens(screens: List<android.graphics.Rect>, device: Int, taskbar: android.graphics.Rect?)
     }
 
     private val pairing = PairingStore(File(context.noBackupFilesDir, "pairing.v2"))
@@ -442,7 +446,52 @@ class StreamServer(
                 if (w > MAX_CURSOR || h > MAX_CURSOR || b.remaining().toLong() < w.toLong() * h * 4) return
                 ui.onCursorShape(w, h, hx, hy, msg, b.position())
             }
+            Protocol.MSG_TEXT_FOCUS -> {
+                if (b.remaining() < 9) return
+                val editable = b.get().toInt() != 0
+                val area = readArea(b)
+                Log.i(TAG, "Champ de saisie : ${if (editable) "oui $area" else "non"}")
+                ui.onTextFocus(if (editable && area != null) area else null)
+            }
+            Protocol.MSG_SCREENS -> {
+                if (b.remaining() < 2) return
+                val n = b.get().toInt() and 0xFF
+                val device = b.get().toInt() and 0xFF
+                if (n > MAX_SCREENS || b.remaining() < n * 8 + 8) return
+                val screens = List(n) {
+                    val x = b.short.toInt()
+                    val y = b.short.toInt()
+                    val w = b.short.toInt() and 0xFFFF
+                    val h = b.short.toInt() and 0xFFFF
+                    android.graphics.Rect(x, y, x + w, y + h)
+                }
+                val taskbar = readArea(b)
+                if (n < 2 || device >= n || taskbar == null) ui.onScreens(emptyList(), 0, null)
+                else ui.onScreens(screens, device, taskbar)
+            }
         }
+    }
+
+    /** Rectangle en 0..65535 ; null s'il est vide. */
+    private fun readArea(b: ByteBuffer): android.graphics.Rect? {
+        val x = b.short.toInt() and 0xFFFF
+        val y = b.short.toInt() and 0xFFFF
+        val w = b.short.toInt() and 0xFFFF
+        val h = b.short.toInt() and 0xFFFF
+        if (w == 0 || h == 0) return null
+        return android.graphics.Rect(x, y, minOf(x + w, 65535), minOf(y + h, 65535))
+    }
+
+    /** Clavier à l'écran affiché, ouverture automatique : le PC ne suit le focus que si l'un des deux l'exige. */
+    fun sendKeyboardState(visible: Boolean, auto: Boolean) {
+        val flags = (if (visible) Protocol.KEYBOARD_VISIBLE else 0) or (if (auto) Protocol.KEYBOARD_AUTO else 0)
+        sendInput(byteArrayOf(Protocol.MSG_KEYBOARD_STATE.toByte(), flags.toByte()))
+    }
+
+    /** Icône de la barre des tâches touchée en (x, y), en 0..65535, lâchée sur l'écran [screen]. */
+    fun sendWindowMove(x: Int, y: Int, screen: Int) {
+        sendInput(ByteBuffer.allocate(6).put(Protocol.MSG_WINDOW_MOVE.toByte()).putShort(x.toShort())
+            .putShort(y.toShort()).put(screen.toByte()).array())
     }
 
     private fun sendStats(s: VideoDecoder.Stats) {
@@ -477,6 +526,7 @@ class StreamServer(
         // Hors de l'instance : l'autorisation survit à une recréation de l'écran.
         @Volatile private var pairingArmed = false
         private const val TAG = "S36X"
+        private const val MAX_SCREENS = 8
         private const val READ_TIMEOUT_MS = 6000
         private const val HANDSHAKE_TIMEOUT_MS = 3000
         private const val PAIRING_TIMEOUT_MS = 120_000
