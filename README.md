@@ -43,7 +43,7 @@ Sur la tablette, **glissez depuis le bord gauche vers le centre** pour ouvrir le
 | **Dupliquer** | La tablette montre l'écran principal du PC |
 | **Tablette seule** | L'écran du PC s'éteint. Il revient seul environ 15 s après une déconnexion |
 | **Fréquence** | 60, 120 ou 144 Hz selon l'appareil |
-| **Rotation** | Automatique ou verrouillée |
+| **Orientation** | Auto (suit l'appareil), Paysage ou Portrait. Paysage par défaut sur un téléphone |
 | **Tactile** | Se coupe pour dessiner au stylet sans que la paume clique |
 | **Touche Windows, Afficher le bureau** | Raccourcis Windows |
 | **Déconnecter** | Ferme l'application et retire le moniteur |
@@ -95,7 +95,7 @@ Paramètres Windows > Applications > 36Screenlink > Désinstaller. Le pilote, le
 Prérequis : Visual Studio 2022 ou Build Tools avec C++, Windows SDK 10.0.26100, Android SDK, JDK 17 et Inno Setup 6. Une APK finale exige un `android/keystore.properties` à vous, jamais versionné, avec `storeFile`, `storePassword`, `keyAlias` et `keyPassword`.
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File windows/build-release.ps1 -Version 1.6.0
+powershell -ExecutionPolicy Bypass -File windows/build-release.ps1 -Version 1.6.1
 ```
 
 Le résultat se trouve dans `dist/release`.

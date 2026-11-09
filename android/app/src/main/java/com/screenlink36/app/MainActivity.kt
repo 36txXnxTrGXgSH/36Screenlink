@@ -51,7 +51,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamServer.Ui {
     private var audioOnTablet = false
     private var displayMode = SideMenu.MODE_EXTENDED
     private var frameRate = 120
-    private var rotationLocked = false
+    private var orientationChoice = SideMenu.ORIENTATION_AUTO
     private var touchEnabled = true
     private var edgeSwipeStart = -1f
     private var edgeSwipeActive = false
@@ -117,7 +117,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamServer.Ui {
         root.addView(softTarget, FrameLayout.LayoutParams(1, 1))
         val buttonSize = (56 * resources.displayMetrics.density).toInt()
         val maxRate = display.supportedModes.maxOf { it.refreshRate }.toInt()
-        menu = SideMenu(this, video, menuActions, listOf(60, 120, 144).filter { it <= maxRate + 1 })
+        menu = SideMenu(this, video, menuActions, listOf(60, 120, 144).filter { it <= maxRate + 1 }, deviceName())
+        orientationChoice = getSharedPreferences("app", MODE_PRIVATE).getInt("orientation",
+            if (isPhone()) SideMenu.ORIENTATION_LANDSCAPE else SideMenu.ORIENTATION_AUTO)
+        applyOrientation()
         refreshMenu()
         root.addView(menu.view, FrameLayout.LayoutParams(MATCH, MATCH))
         pairButton = Button(this).apply {
@@ -147,7 +150,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamServer.Ui {
             gravity = Gravity.CENTER
             val pad = buttonSize / 2
             setPadding(pad, pad, pad, pad)
-            text = "Le PC affiche une invite UAC ou son écran de verrouillage.\n\nTouchez ici et confirmez votre identité pour agir depuis la tablette."
+            text = "Le PC affiche une invite UAC ou son écran de verrouillage.\n\nTouchez ici et confirmez votre identité pour agir depuis cet appareil."
             setOnClickListener { confirmIdentity() }
         }
         root.addView(secureNotice, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.CENTER))
@@ -171,9 +174,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamServer.Ui {
         if (prefs.getBoolean("privacy_notice", false)) return
         AlertDialog.Builder(this)
             .setTitle("Écran partagé")
-            .setMessage("Cette tablette affichera l'écran de votre PC, avec tout ce qu'il contient : messages, documents, " +
+            .setMessage("Cet appareil affichera l'écran de votre PC, avec tout ce qu'il contient : messages, documents, " +
                 "mots de passe visibles. Le flux reste entre vos deux appareils, chiffré, sans serveur ni compte, " +
-                "et rien n'est enregistré.\n\nPensez à qui peut voir la tablette.")
+                "et rien n'est enregistré.\n\nPensez à qui peut voir cet écran.")
             .setPositiveButton("Compris") { _, _ -> prefs.edit().putBoolean("privacy_notice", true).apply() }
             .setCancelable(false)
             .show()
@@ -182,7 +185,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamServer.Ui {
     private fun confirmForget() {
         AlertDialog.Builder(this)
             .setTitle("Oublier ce PC ?")
-            .setMessage("La clé d'appairage est effacée de la tablette. Il faudra un nouvel appairage pour se reconnecter.")
+            .setMessage("La clé d'appairage est effacée de cet appareil. Il faudra un nouvel appairage pour se reconnecter.")
             .setPositiveButton("Oublier") { _, _ ->
                 server?.forgetPairing()
                 status.text = "PC oublié. Touchez Nouvel appairage pour en ajouter un."
@@ -232,9 +235,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamServer.Ui {
             if (fps != frameRate) server?.sendControl(Protocol.CONTROL_FPS, fps)
         }
 
-        override fun onRotationLockToggle() {
-            rotationLocked = !rotationLocked
-            requestedOrientation = if (rotationLocked) ActivityInfo.SCREEN_ORIENTATION_LOCKED else ActivityInfo.SCREEN_ORIENTATION_FULL_USER
+        override fun onOrientation(choice: Int) {
+            if (choice == orientationChoice) return
+            orientationChoice = choice
+            getSharedPreferences("app", MODE_PRIVATE).edit().putInt("orientation", choice).apply()
+            applyOrientation()
             refreshMenu()
         }
 
@@ -260,7 +265,21 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamServer.Ui {
         codes.reversed().forEach { s.sendInput(Keyboard.keyMessage(false, it)) }
     }
 
-    private fun refreshMenu() = menu.update(audioOnTablet, displayMode, frameRate, rotationLocked, touchEnabled)
+    private fun refreshMenu() = menu.update(audioOnTablet, displayMode, frameRate, orientationChoice, touchEnabled)
+
+    // Un téléphone sert d'écran posé à l'horizontale : paysage par défaut, même si la rotation
+    // automatique d'Android est coupée. « Auto » suit, lui, le réglage du téléphone.
+    private fun applyOrientation() {
+        requestedOrientation = when (orientationChoice) {
+            SideMenu.ORIENTATION_LANDSCAPE -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            SideMenu.ORIENTATION_PORTRAIT -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+            else -> ActivityInfo.SCREEN_ORIENTATION_FULL_USER
+        }
+    }
+
+    private fun isPhone() = resources.configuration.smallestScreenWidthDp < 600
+
+    private fun deviceName() = if (isPhone()) "Téléphone" else "Tablette"
 
     // Le geste commence au bord : rien ne part vers Windows tant qu'il n'est pas tranché.
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
@@ -392,7 +411,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamServer.Ui {
         if (!keyguard.isDeviceSecure) {
             AlertDialog.Builder(this)
                 .setTitle("Agir sur l'écran sécurisé du PC ?")
-                .setMessage("Cette tablette n'a pas de code de verrouillage : n'importe qui pourrait valider une invite UAC " +
+                .setMessage("Cet appareil n'a pas de code de verrouillage : n'importe qui pourrait valider une invite UAC " +
                     "ou saisir sur le PC verrouillé. Ajoutez un code dans les paramètres d'Android.")
                 .setPositiveButton("Continuer") { _, _ -> armSecure() }
                 .setNegativeButton("Annuler", null)

@@ -20,6 +20,7 @@ class VideoDecoder(private val surface: Surface, private val onStats: (Stats) ->
     private var codec: MediaCodec? = null
     private var outputThread: Thread? = null
     @Volatile private var waitingForKey = false
+    @Volatile private var lastIdrRequest = 0L
     private val queuedAt = ConcurrentHashMap<Long, Long>()
     private val latencies = IntArray(1024)
     private var latencyCount = 0
@@ -44,7 +45,8 @@ class VideoDecoder(private val surface: Surface, private val onStats: (Stats) ->
         c.start()
         codec = c
         running = true
-        waitingForKey = false
+        // Un décodeur neuf ne peut rien faire d'une image P : il attend la configuration ou une image clé.
+        waitingForKey = true
         outputThread = thread(name = "decoder-output", priority = Thread.MAX_PRIORITY) { drain(c) }
     }
 
@@ -61,7 +63,10 @@ class VideoDecoder(private val surface: Surface, private val onStats: (Stats) ->
         val c = codec ?: return
         val isConfig = flags and Protocol.FLAG_CONFIG != 0
         val isKey = flags and Protocol.FLAG_KEY != 0
-        if (waitingForKey && !isConfig && !isKey) return
+        if (waitingForKey && !isConfig && !isKey) {
+            askKeyFrame(false)
+            return
+        }
 
         val index = try {
             c.dequeueInputBuffer(INPUT_TIMEOUT_US)
@@ -74,10 +79,11 @@ class VideoDecoder(private val surface: Surface, private val onStats: (Stats) ->
             Log.i(TAG, "Aucun tampon libre dans le décodeur : attente d'une image clé")
             synchronized(latencies) { drops++ }
             waitingForKey = true
-            requestIdr()
+            askKeyFrame(true)
             return
         }
-        waitingForKey = false
+        // Seule une image clé rétablit le flux ; la configuration seule ne suffit pas.
+        if (isKey) waitingForKey = false
         val input = c.getInputBuffer(index) ?: return
         input.clear()
         input.put(data, offset, length)
@@ -89,8 +95,18 @@ class VideoDecoder(private val surface: Surface, private val onStats: (Stats) ->
     /** Images perdues avant le décodeur : on attend la prochaine image clé, demandée au PC. */
     fun dropUntilKey() {
         synchronized(latencies) { drops++ }
-        if (!waitingForKey) requestIdr()
         waitingForKey = true
+        askKeyFrame(true)
+    }
+
+    // Une image clé demandée peut se perdre (file vidée juste après son arrivée) : la demande
+    // est renouvelée tant qu'elle n'est pas arrivée, au plus une fois par intervalle.
+    private fun askKeyFrame(now: Boolean) {
+        val t = SystemClock.uptimeMillis()
+        val wait = if (now) IDR_MIN_INTERVAL_MS else IDR_RETRY_MS
+        if (t - lastIdrRequest < wait) return
+        lastIdrRequest = t
+        requestIdr()
     }
 
     private fun drain(c: MediaCodec) {
@@ -179,5 +195,7 @@ class VideoDecoder(private val surface: Surface, private val onStats: (Stats) ->
         private const val INPUT_TIMEOUT_US = 20_000L
         private const val OUTPUT_TIMEOUT_US = 10_000L
         private const val STALE_US = 2_000_000L
+        private const val IDR_MIN_INTERVAL_MS = 100L
+        private const val IDR_RETRY_MS = 500L
     }
 }

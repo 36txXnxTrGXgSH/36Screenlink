@@ -38,6 +38,7 @@ class SideMenu(
     private val video: SurfaceView,
     private val actions: Actions,
     private val frameRates: List<Int>,
+    private val deviceName: String,
 ) {
 
     interface Actions {
@@ -45,7 +46,7 @@ class SideMenu(
         fun onKeyboard()
         fun onDisplayMode(mode: Int)
         fun onFrameRate(fps: Int)
-        fun onRotationLockToggle()
+        fun onOrientation(choice: Int)
         fun onTouchToggle()
         fun onWindowsKey()
         fun onShowDesktop()
@@ -79,16 +80,18 @@ class SideMenu(
     }
     private val link = icon(R.drawable.ms_usb, 24)
     private val pin = icon(R.drawable.ms_keep, 24)
-    private val audio = Segments(listOf("PC" to R.drawable.ms_computer, "Tablette" to R.drawable.ms_tablet_android)) {
+    private val audio = Segments(listOf("PC" to R.drawable.ms_computer, deviceName to R.drawable.ms_tablet_android)) {
         if ((it == 1) != audioOnTablet) actions.onAudioToggle()
     }
-    private val mode = Segments(listOf("Étendu" to null, "Dupliquer" to null, "Tablette seule" to null)) {
+    private val mode = Segments(listOf("Étendu" to null, "Dupliquer" to null, (if (deviceName == "Tablette") "Tablette seule" else "$deviceName seul") to null)) {
         actions.onDisplayMode(it)
     }
     private val rate = Segments(frameRates.map { "$it Hz" to null }) {
         if (frameRates[it] != frameRate) actions.onFrameRate(frameRates[it])
     }
-    private val rotationRow = Setting(appContext, R.drawable.ms_screen_rotation, "Rotation") { actions.onRotationLockToggle() }
+    private val orientation = Segments(listOf("Auto" to null, "Paysage" to null, "Portrait" to null)) {
+        actions.onOrientation(it)
+    }
     private val touchRow = Setting(appContext, R.drawable.ms_touch_app, "Tactile") { actions.onTouchToggle() }
     private val stats = TextView(appContext).apply {
         setTextColor(SECONDARY_COLOR)
@@ -115,9 +118,9 @@ class SideMenu(
         section("Sortie son", audio.view)
         section("Affichage", mode.view)
         section("Fréquence", rate.view)
+        section("Orientation", orientation.view)
         list.addView(LinearLayout(appContext).apply {
             orientation = LinearLayout.VERTICAL
-            addView(rotationRow.view)
             addView(touchRow.view)
         }, block(GAP_DP))
         list.addView(LinearLayout(appContext).apply {
@@ -216,13 +219,13 @@ class SideMenu(
         }, LinearLayout.LayoutParams(WRAP, dp(40)))
     }
 
-    fun update(audioOnTablet: Boolean, displayMode: Int, fps: Int, rotationLocked: Boolean, touchEnabled: Boolean) {
+    fun update(audioOnTablet: Boolean, displayMode: Int, fps: Int, orientationChoice: Int, touchEnabled: Boolean) {
         this.audioOnTablet = audioOnTablet
         frameRate = fps
         audio.select(if (audioOnTablet) 1 else 0)
         mode.select(displayMode)
         rate.select(frameRates.indexOf(fps))
-        rotationRow.set(!rotationLocked, if (rotationLocked) "Verrouillée" else "Automatique")
+        orientation.select(orientationChoice)
         touchRow.set(touchEnabled, if (touchEnabled) "Activé" else "Coupé")
     }
 
@@ -400,6 +403,9 @@ class SideMenu(
         const val MODE_EXTENDED = 0
         const val MODE_DUPLICATE = 1
         const val MODE_TABLET_ONLY = 2
+        const val ORIENTATION_AUTO = 0
+        const val ORIENTATION_LANDSCAPE = 1
+        const val ORIENTATION_PORTRAIT = 2
         private const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
         private const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
         private const val WIDTH_DP = 296

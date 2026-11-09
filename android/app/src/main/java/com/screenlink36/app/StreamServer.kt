@@ -377,8 +377,9 @@ class StreamServer(
                 val pts = b.long
                 val frame = VideoItem.Frame(msg, b.position(), b.remaining(), pts, flags)
                 if (!videoQueue.offer(frame)) {
-                    // Décodeur en retard : on vide la file et on repart d'une image clé.
-                    videoQueue.removeIf { it is VideoItem.Frame }
+                    // Décodeur en retard : on vide la file et on repart d'une image clé. La configuration
+                    // du flux et les images clés restent : sans elles, l'écran resterait noir.
+                    videoQueue.removeIf { it is VideoItem.Frame && it.flags and (Protocol.FLAG_CONFIG or Protocol.FLAG_KEY) == 0 }
                     Log.i(TAG, "File du décodeur pleine : attente d'une image clé")
                     decoder.dropUntilKey()
                     videoQueue.offer(frame)
