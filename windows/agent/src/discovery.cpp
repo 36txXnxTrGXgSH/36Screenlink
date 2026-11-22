@@ -5,15 +5,14 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 
-#include <condition_variable>
+#include <algorithm>
 #include <mutex>
 
 namespace {
 
 struct BrowseContext {
     std::mutex mutex;
-    std::condition_variable done;
-    std::string address;
+    std::vector<std::string> addresses;
 };
 
 VOID WINAPI onBrowse(DWORD status, PVOID context, PDNS_RECORD records) {
@@ -26,8 +25,7 @@ VOID WINAPI onBrowse(DWORD status, PVOID context, PDNS_RECORD records) {
             char text[INET_ADDRSTRLEN];
             inet_ntop(AF_INET, &addr, text, sizeof(text));
             std::lock_guard lock(ctx->mutex);
-            ctx->address = text;
-            ctx->done.notify_all();
+            if (std::find(ctx->addresses.begin(), ctx->addresses.end(), text) == ctx->addresses.end()) ctx->addresses.push_back(text);
             break;
         }
     }
@@ -36,7 +34,7 @@ VOID WINAPI onBrowse(DWORD status, PVOID context, PDNS_RECORD records) {
 
 } // namespace
 
-std::string discoverTablet(int timeoutMs) {
+std::vector<std::string> discoverDevices(int timeoutMs) {
     BrowseContext ctx;
     DNS_SERVICE_BROWSE_REQUEST request{};
     request.Version = DNS_QUERY_REQUEST_VERSION1;
@@ -47,12 +45,11 @@ std::string discoverTablet(int timeoutMs) {
     DNS_SERVICE_CANCEL cancel{};
     if (DnsServiceBrowse(&request, &cancel) != DNS_REQUEST_PENDING) return {};
 
-    std::unique_lock lock(ctx.mutex);
-    ctx.done.wait_for(lock, std::chrono::milliseconds(timeoutMs), [&] { return !ctx.address.empty(); });
-    std::string result = ctx.address;
-    lock.unlock();
+    // Tous les appareils qui répondent dans le délai, pas seulement le premier.
+    Sleep(static_cast<DWORD>(timeoutMs));
     DnsServiceBrowseCancel(&cancel);
     // Le rappel d'annulation peut encore arriver : on lui laisse le temps de finir avant de détruire ctx.
     Sleep(100);
-    return result;
+    std::lock_guard lock(ctx.mutex);
+    return ctx.addresses;
 }

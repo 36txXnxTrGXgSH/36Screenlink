@@ -5,6 +5,9 @@
 #include <cstdio>
 #include <string>
 
+// Préfixe des lignes écrites par ce thread, par exemple le nom de l'appareil d'une session.
+inline thread_local std::string tLogTag;
+
 // Ligne de journal à partir d'un format large, écrite en UTF-8 comme le reste du journal :
 // mêler wprintf et printf sur la même sortie tronquerait les lignes.
 inline void logw(const wchar_t* format, ...) {
@@ -16,6 +19,6 @@ inline void logw(const wchar_t* format, ...) {
     const int n = WideCharToMultiByte(CP_UTF8, 0, wide, -1, nullptr, 0, nullptr, nullptr);
     std::string utf8(static_cast<size_t>(n > 0 ? n - 1 : 0), '\0');
     if (n > 1) WideCharToMultiByte(CP_UTF8, 0, wide, -1, utf8.data(), n, nullptr, nullptr);
-    std::fputs(utf8.c_str(), stdout);
+    std::fputs((tLogTag + utf8).c_str(), stdout);
     std::fflush(stdout);
 }

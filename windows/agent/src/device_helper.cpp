@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cwchar>
 
+#include "capture.h"
 #include "channel.h"
 #include "desktop.h"
 #include "protocol.h"
@@ -170,6 +171,14 @@ void DeviceHelper::sendScreens(bool force) {
     }
     if (!monitors.empty()) putNormalized(w, search.found, device_);
     else w.u16(0).u16(0).u16(0).u16(0);
+    // Ajout en fin de message, ignoré par une ancienne application : 1 pour l'écran d'un appareil.
+    if (!monitors.empty()) {
+        const auto outputs = enumerateOutputs();
+        for (const auto& m : monitors) {
+            const bool device = std::any_of(outputs.begin(), outputs.end(), [&](const OutputInfo& o) { return o.isVirtual && EqualRect(&o.desktop, &m.first); });
+            w.u8(device ? 1 : 0);
+        }
+    }
 
     if (!force && w.data() == lastScreens_) return;
     {

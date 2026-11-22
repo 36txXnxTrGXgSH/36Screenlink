@@ -42,7 +42,7 @@ class SideMenu(
 ) {
 
     interface Actions {
-        fun onAudioToggle()
+        fun onAudioChoice(choice: Int)
         fun onKeyboard()
         fun onDisplayMode(mode: Int)
         fun onFrameRate(fps: Int)
@@ -81,12 +81,12 @@ class SideMenu(
     }
     private val link = icon(R.drawable.ms_usb, 24)
     private val pin = icon(R.drawable.ms_keep, 24)
-    private val audio = Segments(listOf("PC" to R.drawable.ms_computer, deviceName to R.drawable.ms_tablet_android)) {
-        if ((it == 1) != audioOnTablet) actions.onAudioToggle()
-    }
-    private val mode = Segments(listOf("Étendu" to null, "Dupliquer" to null, (if (deviceName == "Tablette") "Tablette seule" else "$deviceName seul") to null)) {
-        actions.onDisplayMode(it)
-    }
+    // Sortie son et affichage dépendent de l'autre appareil connecté : ces deux choix se reconstruisent.
+    private val audioBox = FrameLayout(appContext)
+    private val modeBox = FrameLayout(appContext)
+    private var audio = buildAudio(null)
+    private var mode = buildMode(null)
+    private var otherDevice: String? = null
     private val rate = Segments(frameRates.map { "$it Hz" to null }) {
         if (frameRates[it] != frameRate) actions.onFrameRate(frameRates[it])
     }
@@ -99,7 +99,8 @@ class SideMenu(
         setTextColor(SECONDARY_COLOR)
         textSize = 12f
     }
-    private var audioOnTablet = false
+    private var audioChoice = 0
+    private var displayMode = 0
     private var frameRate = 120
     private var pinned = false
     private var open = false
@@ -117,8 +118,10 @@ class SideMenu(
 
     init {
         list.addView(header())
-        section("Sortie son", audio.view)
-        section("Affichage", mode.view)
+        section("Sortie son", audioBox)
+        section("Affichage", modeBox)
+        audioBox.addView(audio.view, FrameLayout.LayoutParams(MATCH, MATCH))
+        modeBox.addView(mode.view, FrameLayout.LayoutParams(MATCH, MATCH))
         section("Fréquence", rate.view)
         section("Orientation", orientation.view)
         list.addView(LinearLayout(appContext).apply {
@@ -138,6 +141,37 @@ class SideMenu(
     }
 
     private fun dp(value: Int) = (value * density).toInt()
+
+    private fun alone(name: String) = if (name == "Tablette") "Tablette seule" else "$name seul"
+
+    private fun buildAudio(other: String?): Segments {
+        // À trois choix, sans icônes : la place manque.
+        val choices = if (other == null) listOf("PC" to R.drawable.ms_computer, deviceName to R.drawable.ms_tablet_android)
+        else listOf("PC" to null, deviceName to null, other to null)
+        return Segments(choices) { if (it != audioChoice) actions.onAudioChoice(it) }
+    }
+
+    private fun buildMode(other: String?): Segments {
+        val choices = mutableListOf("Étendu" to null, "Dupliquer" to null, alone(deviceName) to null)
+        // Avec un autre appareil : les deux appareils, sans l'écran du PC.
+        if (other != null) choices += (if (other == deviceName) "Les deux ${deviceName.lowercase()}s" else "$deviceName et ${other.lowercase()}") to null
+        return Segments(choices, rows = if (other != null) 2 else 1) { actions.onDisplayMode(it) }
+    }
+
+    /** Autre appareil connecté au PC (« Tablette », « Téléphone »), ou null. */
+    fun setOtherDevice(other: String?) {
+        if (other == otherDevice) return
+        otherDevice = other
+        audio = buildAudio(other)
+        mode = buildMode(other)
+        audioBox.removeAllViews()
+        audioBox.addView(audio.view, FrameLayout.LayoutParams(MATCH, MATCH))
+        modeBox.removeAllViews()
+        modeBox.addView(mode.view, FrameLayout.LayoutParams(MATCH, MATCH))
+        modeBox.layoutParams = modeBox.layoutParams.apply { height = dp(if (other != null) 76 else 40) }
+        audio.select(audioChoice)
+        mode.select(displayMode)
+    }
 
     private fun block(top: Int) = LinearLayout.LayoutParams(MATCH, WRAP).apply {
         topMargin = dp(top)
@@ -222,10 +256,11 @@ class SideMenu(
         }, LinearLayout.LayoutParams(WRAP, dp(40)))
     }
 
-    fun update(audioOnTablet: Boolean, displayMode: Int, fps: Int, orientationChoice: Int, touchEnabled: Boolean, autoKeyboard: Boolean) {
-        this.audioOnTablet = audioOnTablet
+    fun update(audioChoice: Int, displayMode: Int, fps: Int, orientationChoice: Int, touchEnabled: Boolean, autoKeyboard: Boolean) {
+        this.audioChoice = audioChoice
+        this.displayMode = displayMode
         frameRate = fps
-        audio.select(if (audioOnTablet) 1 else 0)
+        audio.select(audioChoice)
         mode.select(displayMode)
         rate.select(frameRates.indexOf(fps))
         orientation.select(orientationChoice)
@@ -275,11 +310,17 @@ class SideMenu(
     }
 
     /** Boutons segmentés : un seul choix actif. */
-    private inner class Segments(labels: List<Pair<String, Int?>>, onPick: (Int) -> Unit) {
+    private inner class Segments(labels: List<Pair<String, Int?>>, rows: Int = 1, onPick: (Int) -> Unit) {
         val view = LinearLayout(appContext).apply {
+            orientation = LinearLayout.VERTICAL
             setPadding(dp(4), dp(4), dp(4), dp(4))
             background = rounded(GLASS_FILL, 20)
         }
+        // Choix répartis sur plusieurs lignes quand ils ne tiennent pas sur une seule.
+        private val lines = List(rows) {
+            LinearLayout(appContext).also { line -> view.addView(line, LinearLayout.LayoutParams(MATCH, 0, 1f)) }
+        }
+        private val perLine = (labels.size + rows - 1) / rows
         private val items = labels.mapIndexed { index, (label, iconResource) ->
             val text = TextView(appContext).apply {
                 this.text = label
@@ -297,7 +338,7 @@ class SideMenu(
                 }
                 addView(text)
             }
-            view.addView(item, LinearLayout.LayoutParams(WRAP, MATCH, 1f))
+            lines[index / perLine].addView(item, LinearLayout.LayoutParams(WRAP, MATCH, 1f))
             Triple(item, text, image)
         }
 

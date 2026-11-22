@@ -1,23 +1,32 @@
 #pragma once
 #include <windows.h>
 
+#include <mutex>
 #include <string>
 
 // Pilote 36ScreenlinkDevice.exe, seul composant élevé : une invite UAC au démarrage,
-// puis le moniteur suit la tablette sans nouvelle invite. L'assistant s'arrête avec l'agent.
+// puis les moniteurs suivent les appareils sans nouvelle invite. L'assistant s'arrête avec l'agent.
+// Deux emplacements, un par appareil connecté en même temps.
 class VirtualMonitor {
 public:
+    static constexpr int kSlots = 2;
+
     ~VirtualMonitor();
-    // Sans effet si notre moniteur virtuel existe déjà.
+    // Lance l'assistant. Sans lui, chaque appareil montre l'écran principal.
     void start();
-    // Demande le moniteur et attend qu'il apparaisse dans DXGI.
-    void raise();
-    void release();
+    bool available() const { return managed_; }
+    // Crée le moniteur de cet emplacement si besoin et renvoie son nom Windows (\\.\DISPLAYn),
+    // ou vide s'il n'est pas apparu.
+    std::wstring raise(int slot);
+    void release(int slot);
+    bool raised(int slot) const { return raised_[slot]; }
 
 private:
     bool managed_ = false;
-    bool raised_ = false;
+    bool raised_[kSlots] = {};
+    std::wstring names_[kSlots];
     HANDLE helper_ = nullptr;
-    HANDLE raiseEvent_ = nullptr;
-    HANDLE releaseEvent_ = nullptr;
+    HANDLE raiseEvents_[kSlots] = {};
+    HANDLE releaseEvents_[kSlots] = {};
+    std::mutex mutex_;
 };

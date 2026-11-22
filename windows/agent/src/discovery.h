@@ -1,5 +1,7 @@
 #pragma once
 #include <string>
 
-// Cherche la tablette par mDNS (_screenlink._tcp). Renvoie son adresse IPv4, ou vide.
-std::string discoverTablet(int timeoutMs);
+#include <vector>
+
+// Cherche les appareils par mDNS (_screenlink._tcp) pendant timeoutMs. Renvoie leurs adresses IPv4.
+std::vector<std::string> discoverDevices(int timeoutMs);

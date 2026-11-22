@@ -49,6 +49,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamServer.Ui {
     private lateinit var waitingButtons: LinearLayout
     private lateinit var menu: SideMenu
     private var audioOnTablet = false
+    private var audioTarget = Protocol.NO_DEVICE
+    private var selfDevice = Protocol.NO_DEVICE
+    private var otherDevices: List<Pair<Int, Int>> = emptyList()
     private var displayMode = SideMenu.MODE_EXTENDED
     private var frameRate = 120
     private var orientationChoice = SideMenu.ORIENTATION_AUTO
@@ -66,6 +69,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamServer.Ui {
     private var screens: List<Rect> = emptyList()
     private var deviceScreen = 0
     private var taskbar: Rect? = null
+    private var deviceScreens: List<Boolean> = emptyList()
     private var dragState = DRAG_IDLE
     private var dragDown: MotionEvent? = null
     private val dragLongPress = Runnable { if (dragState == DRAG_PENDING) passDrag() }
@@ -257,8 +261,13 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamServer.Ui {
     }
 
     private val menuActions = object : SideMenu.Actions {
-        override fun onAudioToggle() {
-            server?.requestAudioRoute(!audioOnTablet)
+        override fun onAudioChoice(choice: Int) {
+            val other = otherDevices.firstOrNull()
+            when (choice) {
+                0 -> server?.requestAudioRoute(false)
+                1 -> server?.requestAudioRoute(true, selfDevice)
+                else -> if (other != null) server?.requestAudioRoute(true, other.first)
+            }
         }
 
         override fun onKeyboard() = toggleSoftKeyboard()
@@ -308,7 +317,14 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamServer.Ui {
         codes.reversed().forEach { s.sendInput(Keyboard.keyMessage(false, it)) }
     }
 
-    private fun refreshMenu() = menu.update(audioOnTablet, displayMode, frameRate, orientationChoice, touchEnabled, autoKeyboard)
+    private fun refreshMenu() = menu.update(audioChoice(), displayMode, frameRate, orientationChoice, touchEnabled, autoKeyboard)
+
+    // 0 son sur le PC, 1 sur cet appareil, 2 sur l'autre appareil.
+    private fun audioChoice() = when {
+        audioOnTablet || (audioTarget != Protocol.NO_DEVICE && audioTarget == selfDevice) -> 1
+        audioTarget != Protocol.NO_DEVICE && otherDevices.any { it.first == audioTarget } -> 2
+        else -> 0
+    }
 
     // Un téléphone sert d'écran posé à l'horizontale : paysage par défaut, même si la rotation
     // automatique d'Android est coupée. « Auto » suit, lui, le réglage du téléphone.
@@ -391,6 +407,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamServer.Ui {
 
     override fun onWaiting(message: String) = runOnUiThread {
         streamWidth = 0
+        otherDevices = emptyList()
+        menu.setOtherDevice(null)
         screens = emptyList()
         taskbar = null
         textFocus = null
@@ -429,8 +447,18 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamServer.Ui {
         }
     }
 
-    override fun onAudioRoute(onTablet: Boolean) = runOnUiThread {
+    override fun onAudioRoute(onTablet: Boolean, target: Int) = runOnUiThread {
         audioOnTablet = onTablet
+        audioTarget = if (target == Protocol.NO_DEVICE && onTablet) selfDevice else target
+        refreshMenu()
+    }
+
+    override fun onDevices(self: Int, others: List<Pair<Int, Int>>) = runOnUiThread {
+        selfDevice = self
+        otherDevices = others
+        // Un seul autre appareil à la fois : le PC en gère deux.
+        val other = others.firstOrNull()
+        menu.setOtherDevice(other?.let { if (it.second == Protocol.KIND_PHONE) "Téléphone" else "Tablette" })
         refreshMenu()
     }
 
@@ -463,8 +491,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamServer.Ui {
         updatePan()
     }
 
-    override fun onScreens(screens: List<Rect>, device: Int, taskbar: Rect?) = runOnUiThread {
+    override fun onScreens(screens: List<Rect>, device: Int, taskbar: Rect?, devices: List<Boolean>) = runOnUiThread {
         this.screens = screens
+        deviceScreens = devices
         deviceScreen = device
         this.taskbar = taskbar
     }
@@ -749,7 +778,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamServer.Ui {
                         if (up > slop && up > side) {
                             video.removeCallbacks(dragLongPress)
                             dragState = DRAG_ACTIVE
-                            picker.show(screens, deviceScreen, if (isPhone()) "Ce téléphone" else "Cette tablette")
+                            picker.show(screens, deviceScreen, if (isPhone()) "Ce téléphone" else "Cette tablette", deviceScreens)
                             picker.track(event.x + video.x, event.y + video.y)
                         } else if (side > slop || -up > slop) {
                             passDrag()

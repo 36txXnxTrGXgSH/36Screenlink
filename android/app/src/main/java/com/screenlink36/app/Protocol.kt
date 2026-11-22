@@ -42,6 +42,12 @@ object Protocol {
     const val MSG_TEXT_FOCUS = 24
     const val MSG_SCREENS = 25
     const val MSG_WINDOW_MOVE = 26
+    const val MSG_DEVICES = 27
+
+    const val KIND_TABLET = 0
+    const val KIND_PHONE = 1
+    /** Son sur le PC, ou aucun appareil désigné. */
+    const val NO_DEVICE = 0xFF
 
     const val KEYBOARD_VISIBLE = 1
     const val KEYBOARD_AUTO = 2

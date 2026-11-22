@@ -19,6 +19,7 @@ class ScreenPicker(context: Context) : View(context) {
     private var screens: List<Rect> = emptyList()
     private var device = 0
     private var deviceLabel = ""
+    private var others: List<Boolean> = emptyList()
     private val boxes = mutableListOf<RectF>()
     private var hover = -1
     private var fingerX = -1f
@@ -50,8 +51,9 @@ class ScreenPicker(context: Context) : View(context) {
     /** Index de l'écran sous le doigt, ou -1. */
     val picked get() = hover
 
-    fun show(screens: List<Rect>, device: Int, deviceLabel: String) {
+    fun show(screens: List<Rect>, device: Int, deviceLabel: String, devices: List<Boolean>) {
         this.screens = screens
+        others = devices
         this.device = device
         this.deviceLabel = deviceLabel
         hover = -1
@@ -113,7 +115,12 @@ class ScreenPicker(context: Context) : View(context) {
             val cy = box.centerY() + number.textSize * 0.3f
             canvas.drawText("${i + 1}", box.centerX(), cy, number)
             if (box.height() > number.textSize + caption.textSize * 2) {
-                canvas.drawText(if (i == device) deviceLabel else "Écran du PC", box.centerX(), cy + caption.textSize * 1.6f, caption)
+                val label = when {
+                    i == device -> deviceLabel
+                    others.getOrElse(i) { false } -> "Autre appareil"
+                    else -> "Écran du PC"
+                }
+                canvas.drawText(label, box.centerX(), cy + caption.textSize * 1.6f, caption)
             }
         }
         if (fingerX >= 0) {

@@ -39,6 +39,17 @@ La même application sert aux deux et s'adapte toute seule :
 - **Téléphone :** un petit écran d'appoint, pour une messagerie, un lecteur ou un tableau de bord à côté du clavier. Il s'ouvre en paysage, même avec la rotation d'Android verrouillée, et le menu parle de « Téléphone ».
 - **Résolution sur téléphone :** l'écran Windows prend le mode le plus proche disponible. Sur le Motorola edge 60 (2712×1220, 120 Hz), c'est 2400×1080 à 60 Hz pour l'instant.
 
+### Deux appareils en même temps
+
+Une tablette et un téléphone peuvent être connectés ensemble, en USB ou en Wi-Fi : Windows voit alors trois écrans, le moniteur du PC et un écran par appareil.
+
+- **Appairage :** chaque appareil a sa propre clé. Pour en ajouter un second, ouvrez l'application sur cet appareil, touchez *Nouvel appairage*, puis comparez le code. Le premier reste appairé.
+- **Réglages :** mode d'affichage, fréquence et orientation se règlent depuis le menu de chaque appareil, pour lui seul.
+- **Son :** la *Sortie son* de chaque menu propose le PC, cet appareil et l'autre appareil. Le son part vers un seul appareil à la fois.
+- **Glisser une icône :** le choix d'écran montre les trois écrans ; celui de l'autre appareil s'appelle « Autre appareil ».
+- **Arrivée ou départ d'un appareil :** Windows réorganise les écrans. L'image de l'autre appareil se coupe alors environ deux secondes, le temps de repartir à la bonne place.
+- **Affichage :** *Tablette seule* (ou *Téléphone seul*) ne garde que cet appareil : l'écran du PC s'éteint et l'autre appareil attend. *Tablette et téléphone* éteint seulement l'écran du PC : les deux appareils restent allumés. *Étendu* rallume tout.
+
 ## Utilisation
 
 Sur l'appareil, **glissez depuis le bord gauche vers le centre** pour ouvrir le menu en verre dépoli. Touchez à côté ou la croix pour le refermer. L'épingle le garde ouvert : les touches à côté repartent alors vers Windows.
@@ -106,7 +117,7 @@ Paramètres Windows > Applications > 36Screenlink > Désinstaller. Le pilote, le
 Prérequis : Visual Studio 2022 ou Build Tools avec C++, Windows SDK 10.0.26100, Android SDK, JDK 17 et Inno Setup 6. Une APK finale exige un `android/keystore.properties` à vous, jamais versionné, avec `storeFile`, `storePassword`, `keyAlias` et `keyPassword`.
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File windows/build-release.ps1 -Version 1.7.0
+powershell -ExecutionPolicy Bypass -File windows/build-release.ps1 -Version 1.8.0
 ```
 
 Le résultat se trouve dans `dist/release`.

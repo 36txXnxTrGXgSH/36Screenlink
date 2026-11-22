@@ -3,7 +3,9 @@
 // SwDeviceCreate exige des droits Administrateur.
 //
 // Sans argument : moniteur actif jusqu'à Ctrl+C.
-// --parent <pid> : piloté par l'agent via deux événements, arrêt à la fin de l'agent.
+// --parent <pid> : piloté par l'agent via deux événements par moniteur, arrêt à la fin de l'agent.
+// Deux moniteurs au plus, un par appareil : chacun est un périphérique logiciel distinct,
+// servi par le même pilote, et Windows mémorise la place de chacun.
 #include <windows.h>
 #include <swdevice.h>
 
@@ -26,10 +28,14 @@ VOID WINAPI onCreated(HSWDEVICE, HRESULT result, PVOID, PCWSTR) {
     SetEvent(gCreated);
 }
 
-HSWDEVICE createDevice() {
+constexpr int kSlots = 2;
+// Le premier garde l'identifiant d'avant : Windows retrouve la disposition déjà réglée.
+const wchar_t* const kInstanceIds[kSlots] = {L"36ScreenlinkIdd", L"36ScreenlinkIdd2"};
+
+HSWDEVICE createDevice(int slot = 0) {
     SW_DEVICE_CREATE_INFO info = {};
     info.cbSize = sizeof(info);
-    info.pszInstanceId = L"36ScreenlinkIdd";
+    info.pszInstanceId = kInstanceIds[slot];
     info.pszzHardwareIds = L"36ScreenlinkIdd\0\0";
     info.pszzCompatibleIds = L"36ScreenlinkIdd\0\0";
     info.pszDeviceDescription = L"36Screenlink Display";
@@ -86,25 +92,32 @@ void installDriverIfPortable() {
 int runForParent(DWORD pid) {
     installDriverIfPortable();
     HANDLE parent = OpenProcess(SYNCHRONIZE, FALSE, pid);
+    if (!parent) return 1;
     const std::wstring id = std::to_wstring(pid);
-    HANDLE raise = OpenEventW(SYNCHRONIZE, FALSE, (L"Local\\ScreenlinkRaise-" + id).c_str());
-    HANDLE release = OpenEventW(SYNCHRONIZE, FALSE, (L"Local\\ScreenlinkRelease-" + id).c_str());
-    if (!parent || !raise || !release) return 1;
+    // handles : le parent, puis pour chaque moniteur ses événements « créer » et « retirer ».
+    HANDLE handles[1 + 2 * kSlots] = {parent};
+    for (int slot = 0; slot < kSlots; ++slot) {
+        const std::wstring suffix = id + L"-" + std::to_wstring(slot);
+        handles[1 + 2 * slot] = OpenEventW(SYNCHRONIZE, FALSE, (L"Local\\ScreenlinkRaise-" + suffix).c_str());
+        handles[2 + 2 * slot] = OpenEventW(SYNCHRONIZE, FALSE, (L"Local\\ScreenlinkRelease-" + suffix).c_str());
+        if (!handles[1 + 2 * slot] || !handles[2 + 2 * slot]) return 1;
+    }
 
-    HSWDEVICE device = nullptr;
-    HANDLE handles[] = {parent, raise, release};
+    HSWDEVICE devices[kSlots] = {};
     for (;;) {
-        const DWORD wait = WaitForMultipleObjects(3, handles, FALSE, INFINITE);
-        if (wait == WAIT_OBJECT_0 + 1) {
-            if (!device) device = createDevice();
-        } else if (wait == WAIT_OBJECT_0 + 2) {
-            if (device) SwDeviceClose(device);
-            device = nullptr;
-        } else {
-            break;
+        const DWORD wait = WaitForMultipleObjects(1 + 2 * kSlots, handles, FALSE, INFINITE);
+        if (wait == WAIT_OBJECT_0 || wait < WAIT_OBJECT_0 || wait >= WAIT_OBJECT_0 + 1 + 2 * kSlots) break;
+        const int slot = static_cast<int>(wait - WAIT_OBJECT_0 - 1) / 2;
+        const bool raise = (wait - WAIT_OBJECT_0 - 1) % 2 == 0;
+        if (raise) {
+            if (!devices[slot]) devices[slot] = createDevice(slot);
+        } else if (devices[slot]) {
+            SwDeviceClose(devices[slot]);
+            devices[slot] = nullptr;
         }
     }
-    if (device) SwDeviceClose(device);
+    for (HSWDEVICE device : devices)
+        if (device) SwDeviceClose(device);
     return 0;
 }
 

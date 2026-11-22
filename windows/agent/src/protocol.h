@@ -18,7 +18,7 @@ enum HandshakeMode : uint8_t { kModeSession = 0, kModePair = 1 };
 enum HandshakeStatus : uint8_t { kStatusOk = 0, kStatusNotPaired = 1, kStatusBadVersion = 2, kStatusPairRefused = 3 };
 
 enum Msg : uint8_t {
-    kHello = 1,        // T->A u16 w, u16 h, u16 maxFps, u8 codecs (bit0 avc, bit1 hevc)
+    kHello = 1,        // T->A u16 w, u16 h, u16 maxFps, u8 codecs (bit0 avc, bit1 hevc), [u8 type : 0 tablette, 1 téléphone]
     kStreamConfig = 2, // A->T u8 codec, u16 w, u16 h, u16 fps, u32 bitrate, u16 rotation (degrés)
     kVideo = 3,        // A->T u8 flags, u64 ptsUs, bytes
     kTouch = 4,        // T->A u8 n, n * (u8 id, u8 down, u16 x, u16 y) ; x,y sur 0..65535
@@ -33,8 +33,8 @@ enum Msg : uint8_t {
     kText = 13,        // T->A texte UTF-8 du clavier à l'écran
     kPen = 14,         // T->A u8 état, u16 x, u16 y, u16 pression 0..1024, i8 tiltX, i8 tiltY, u16 rotation
     kAudio = 15,       // A->T u32 fréquence, PCM stéréo 16 bits little-endian
-    kAudioRoute = 16,  // T->A u8 sortie demandée (0 PC, 1 tablette)
-    kAudioState = 17,  // A->T u8 sortie active (0 PC, 1 tablette)
+    kAudioRoute = 16,  // T->A u8 sortie demandée (0 PC, 1 appareil), [u8 appareil visé, 0xFF : celui-ci]
+    kAudioState = 17,  // A->T u8 1 si le son sort sur cet appareil, [u8 appareil qui le reçoit, 0xFF : le PC]
     kControl = 18,     // T->A u8 réglage, u8 valeur
     kControlState = 19, // A->T u8 mode d'affichage, u8 fréquence
     kSecureState = 20, // A->T u8 1 si l'écran montré est l'UAC ou le verrouillage
@@ -44,14 +44,19 @@ enum Msg : uint8_t {
     kKeyboardState = 23, // T->A u8 drapeaux (1 clavier à l'écran affiché, 2 ouverture automatique)
     kTextFocus = 24,   // A->T u8 1 si un champ de saisie a le focus sur cet écran, u16 x, y, w, h (0..65535)
     kScreens = 25,     // A->T u8 n, u8 index de l'appareil, n * (i16 x, i16 y, u16 w, u16 h) en pixels du bureau,
-                       //      puis barre des tâches de l'appareil u16 x, y, w, h (0..65535, w = 0 si aucune)
+                       //      puis barre des tâches de l'appareil u16 x, y, w, h (0..65535, w = 0 si aucune),
+                       //      puis n × u8 (1 si l'écran est celui d'un appareil 36Screenlink)
     kWindowMove = 26,  // T->A u16 x, u16 y de l'icône touchée (0..65535), u8 index de l'écran voulu
+    kDevices = 27,     // A->T u8 cet appareil, u8 n, n * (u8 appareil, u8 type) : les appareils connectés
 };
 
 enum KeyboardFlags : uint8_t { kKeyboardVisible = 1, kKeyboardAuto = 2 };
 
 enum Control : uint8_t { kControlDisplay = 1, kControlFps = 2 };
-enum DisplayMode : uint8_t { kDisplayExtended = 0, kDisplayDuplicate = 1, kDisplayTabletOnly = 2 };
+// 2 : cet appareil seul, les autres écrans éteints. 3 : les appareils seuls, sans l'écran du PC.
+enum DisplayMode : uint8_t { kDisplayExtended = 0, kDisplayDuplicate = 1, kDisplayTabletOnly = 2, kDisplayDevicesOnly = 3 };
+enum DeviceKind : uint8_t { kKindTablet = 0, kKindPhone = 1 };
+inline constexpr uint8_t kNoDevice = 0xFF;
 
 enum MouseButton : uint8_t { kMouseLeft = 1, kMouseRight = 2, kMouseMiddle = 4 };
 inline constexpr uint16_t kKeyVirtual = 0x8000;

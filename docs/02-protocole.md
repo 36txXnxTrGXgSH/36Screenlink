@@ -60,7 +60,7 @@ Nonce de 12 octets : 4 octets nuls, puis compteur 64 bits propre à chaque sens.
 
 | Id | Nom | Sens | Contenu |
 |---|---|---|---|
-| 1 | HELLO | T→PC | u16 w, u16 h, u16 fpsMax, u8 codecs (bit 0 AVC, bit 1 HEVC) |
+| 1 | HELLO | T→PC | u16 w, u16 h, u16 fpsMax, u8 codecs (bit 0 AVC, bit 1 HEVC), puis u8 type (0 tablette, 1 téléphone), absent d'une ancienne application |
 | 2 | STREAM_CONFIG | PC→T | u8 codec, u16 w, u16 h, u16 fps, u32 débit, u16 rotation en degrés |
 | 3 | VIDEO | PC→T | u8 drapeaux (1 config, 2 clé), u64 ptsUs, Annex-B |
 | 4 | TOUCH | T→PC | u8 n, n × (u8 id, u8 appui, u16 x, u16 y) ; x et y sur 0..65535 |
@@ -74,20 +74,25 @@ Nonce de 12 octets : 4 octets nuls, puis compteur 64 bits propre à chaque sens.
 | 12 | KEY | T→PC | u8 appui, u16 code (scancode set 1, 0x100 = préfixe E0 ; 0x8000 \| code virtuel Windows pour une touche sans code physique) |
 | 13 | TEXT | T→PC | Texte UTF-8 du clavier à l'écran |
 | 18 | CONTROL | T→PC | u8 réglage (1 affichage, 2 fréquence : 60, 120 ou 144), u8 valeur |
-| 19 | CONTROL_STATE | PC→T | u8 mode d'affichage (0 étendu, 1 dupliqué, 2 tablette seule), u8 fréquence |
+| 19 | CONTROL_STATE | PC→T | u8 mode d'affichage (0 étendu, 1 dupliqué, 2 cet appareil seul, 3 les appareils seuls, sans l'écran du PC), u8 fréquence |
 | 15 | AUDIO | PC→T | u32 fréquence, PCM stéréo 16 bits little-endian |
-| 16 | AUDIO_ROUTE | T→PC | u8 sortie demandée (0 PC, 1 tablette) |
-| 17 | AUDIO_STATE | PC→T | u8 sortie active (0 PC, 1 tablette) |
+| 16 | AUDIO_ROUTE | T→PC | u8 sortie demandée (0 PC, 1 appareil), puis u8 appareil visé (0xFF : celui qui demande) |
+| 17 | AUDIO_STATE | PC→T | u8 1 si le son sort sur cet appareil, puis u8 appareil qui le reçoit (0xFF : le PC) |
 | 20 | SECURE_STATE | PC→T | u8 1 si l'écran montré est l'UAC ou le verrouillage |
 | 21 | SECURE_ARMED | T→PC | vide : identité confirmée sur la tablette, la saisie est acceptée sur l'écran sécurisé |
 | 22 | MOUSE | T→PC | u8 boutons (1 gauche, 2 droit, 4 milieu), u16 x, u16 y, i16 molette verticale, i16 horizontale (crans de 120) |
 | 14 | PEN | T→PC | u8 état (1 portée, 2 contact, 4 bouton, 8 gomme), u16 x, u16 y, u16 pression 0..1024, i8 tiltX, i8 tiltY, u16 rotation |
 | 23 | KEYBOARD_STATE | T→PC | u8 drapeaux (1 clavier à l'écran affiché, 2 ouverture automatique) ; le PC ne suit le focus que si l'un des deux est actif |
 | 24 | TEXT_FOCUS | PC→T | u8 1 si un champ de saisie modifiable a le focus sur l'écran de l'appareil, u16 x, y, w, h du curseur ou du champ (0..65535) |
-| 25 | SCREENS | PC→T | u8 n, u8 index de l'appareil, n × (i16 x, i16 y, u16 w, u16 h) en pixels du bureau, puis la barre des tâches de l'appareil u16 x, y, w, h (0..65535). n = 0 quand le glisser d'icône n'a pas de sens |
+| 25 | SCREENS | PC→T | u8 n, u8 index de l'appareil, n × (i16 x, i16 y, u16 w, u16 h) en pixels du bureau, puis la barre des tâches de l'appareil u16 x, y, w, h (0..65535), puis n × u8 (1 si l'écran est celui d'un appareil). n = 0 quand le glisser d'icône n'a pas de sens |
 | 26 | WINDOW_MOVE | T→PC | u16 x, u16 y de l'icône touchée (0..65535), u8 index de l'écran choisi |
+| 27 | DEVICES | PC→T | u8 cet appareil, u8 n, n × (u8 appareil, u8 type) : les appareils connectés, renvoyé à chaque arrivée ou départ |
 
-Les messages 23 à 26 ont été ajoutés sans changer de version : une ancienne application ou un ancien agent les ignore, et le reste fonctionne.
+Le PC peut tenir deux sessions à la fois, une par appareil, chacune avec sa clé d'appairage et son moniteur virtuel. En USB, chaque appareil a son propre tunnel adb (`adb -s <série> forward`, ports locaux 7237 et suivants). Avant de se connecter, le PC écarte tout appareil déjà en session, reconnu à son numéro de série ou à son adresse Wi-Fi : une seconde connexion authentifiée prendrait la place de la session en cours sur l'appareil.
+
+En mode 2, l'appareil a l'écran pour lui seul : l'autre session s'arrête et le PC ne reconnecte aucun autre appareil tant que ce mode dure.
+
+Les messages 23 à 27 et les octets ajoutés en fin de HELLO, AUDIO_ROUTE et AUDIO_STATE l'ont été sans changer de version : une ancienne application ou un ancien agent les ignore, et le reste fonctionne.
 
 Le PC numérote les écrans ainsi : l'écran principal d'abord, puis de gauche à droite. Il envoie SCREENS au début de la session et à chaque changement, au plus une fois par seconde. Pour WINDOW_MOVE, il simule une touche sur l'icône. La fenêtre qui s'active ensuite part sur l'écran choisi, y compris celle choisie dans les miniatures, pendant 8 s.
 

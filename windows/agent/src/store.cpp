@@ -62,8 +62,29 @@ void saveAudioOnTablet(bool onTablet) {
     std::ofstream(dataFilePath(L"audio.txt"), std::ios::trunc) << (onTablet ? 1 : 0);
 }
 
-std::optional<Key256> loadPsk() {
-    std::ifstream in(dataDir() / L"pairing.bin", std::ios::binary);
+namespace {
+
+fs::path deviceFile(int device, const wchar_t* first, const wchar_t* stem, const wchar_t* ext) {
+    if (device == 0) return dataDir() / first;
+    return dataDir() / (std::wstring(stem) + L"-" + std::to_wstring(device) + ext);
+}
+
+std::string readWord(const fs::path& path) {
+    std::ifstream in(path);
+    std::string value;
+    in >> value;
+    return value;
+}
+
+void writeWord(const fs::path& path, const std::string& value) {
+    fs::create_directories(path.parent_path());
+    std::ofstream(path, std::ios::trunc) << value;
+}
+
+} // namespace
+
+std::optional<Key256> loadPsk(int device) {
+    std::ifstream in(deviceFile(device, L"pairing.bin", L"pairing", L".bin"), std::ios::binary);
     if (!in) return std::nullopt;
     std::vector<char> blob((std::istreambuf_iterator<char>(in)), {});
     DATA_BLOB enc{static_cast<DWORD>(blob.size()), reinterpret_cast<BYTE*>(blob.data())}, plain{};
@@ -78,28 +99,31 @@ std::optional<Key256> loadPsk() {
     return key;
 }
 
-bool savePsk(const Key256& key) {
+bool savePsk(int device, const Key256& key) {
     const fs::path dir = dataDir();
     fs::create_directories(dir);
     DATA_BLOB plain{32, const_cast<BYTE*>(key.data())}, enc{};
     // Le compte SYSTEM n'a pas de session utilisateur : la clé est liée à la machine.
     const DWORD flags = gSystemMode ? CRYPTPROTECT_LOCAL_MACHINE : 0;
     if (!CryptProtectData(&plain, L"36Screenlink", nullptr, nullptr, nullptr, flags, &enc)) return false;
-    std::ofstream out(dir / L"pairing.bin", std::ios::binary | std::ios::trunc);
+    std::ofstream out(deviceFile(device, L"pairing.bin", L"pairing", L".bin"), std::ios::binary | std::ios::trunc);
     out.write(reinterpret_cast<char*>(enc.pbData), enc.cbData);
     LocalFree(enc.pbData);
     return out.good();
 }
 
-std::string loadTabletAddress() {
-    std::ifstream in(dataDir() / L"tablet.txt");
-    std::string address;
-    in >> address;
-    return address;
+std::string loadDeviceAddress(int device) {
+    return readWord(deviceFile(device, L"tablet.txt", L"address", L".txt"));
 }
 
-void saveTabletAddress(const std::string& address) {
-    const fs::path dir = dataDir();
-    fs::create_directories(dir);
-    std::ofstream(dir / L"tablet.txt", std::ios::trunc) << address;
+void saveDeviceAddress(int device, const std::string& address) {
+    writeWord(deviceFile(device, L"tablet.txt", L"address", L".txt"), address);
+}
+
+std::string loadDeviceSerial(int device) {
+    return readWord(deviceFile(device, L"serial.txt", L"serial", L".txt"));
+}
+
+void saveDeviceSerial(int device, const std::string& serial) {
+    writeWord(deviceFile(device, L"serial.txt", L"serial", L".txt"), serial);
 }

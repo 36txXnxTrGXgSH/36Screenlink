@@ -12,6 +12,9 @@
 #include <cstdio>
 #include <ctime>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -64,22 +67,68 @@ struct Options {
 
 std::atomic<bool> gStop{false};
 std::atomic<bool> gAudioOnTablet{false};
-std::atomic<uint8_t> gDisplayMode{proto::kDisplayExtended};
-std::atomic<uint32_t> gFps{120};
-std::atomic<bool> gRestartSession{false};
+// Le son ne part que vers un appareil à la fois : le dernier qui l'a demandé.
+std::atomic<int> gAudioDevice{-1};
 bool gUserQuit = false;
 std::mutex gStatusMutex;
 std::wstring gStatus = L"Démarrage";
+std::wstring gSlotStatus[VirtualMonitor::kSlots];
 VirtualMonitor gMonitor;
-// Après ce délai sans tablette, le moniteur est retiré et Windows récupère les fenêtres.
+// Après ce délai sans appareil, son moniteur est retiré et Windows récupère les fenêtres.
 constexpr auto kMonitorGrace = std::chrono::seconds(10);
-std::chrono::steady_clock::time_point gLastSessionEnd{};
 constexpr uint32_t kMinBitrate = 15'000'000;
 constexpr uint32_t kCongestedLatUs = 150'000;
+// Premier port local des tunnels adb, un par appareil USB.
+constexpr uint16_t kFirstUsbPort = 7237;
+
+// Réglages propres à chaque appareil appairé, gardés d'une session à l'autre.
+struct DeviceSettings {
+    std::atomic<uint8_t> displayMode{proto::kDisplayExtended};
+    std::atomic<uint32_t> fps{120};
+};
+DeviceSettings gSettings[kMaxDevices];
+// Changements de configuration d'affichage : un seul à la fois, quel que soit l'appareil.
+std::mutex gDisplayMutex;
+// Emplacements dont la session a éteint les écrans du PC (« Tablette seule »).
+std::atomic<bool> gSlotAlone[VirtualMonitor::kSlots];
+
+// « Tablette seule » : l'emplacement qui a l'écran pour lui seul, -1 sinon. Les autres appareils
+// attendent qu'il le rende.
+std::atomic<int> gExclusiveSlot{-1};
+std::atomic<bool> gStopSlot[VirtualMonitor::kSlots];
+// Appareils en session (index, type), annoncés à chacun pour ses menus.
+std::mutex gConnectedMutex;
+std::vector<std::pair<int, uint8_t>> gConnected;
+std::atomic<uint32_t> gConnectedVersion{0};
+
+// Emplacement de la session du thread courant, -1 hors session.
+thread_local int tSlot = -1;
 
 void setStatus(const std::wstring& s) {
     std::lock_guard lock(gStatusMutex);
-    gStatus = s;
+    if (tSlot >= 0) gSlotStatus[tSlot] = s;
+    else gStatus = s;
+}
+
+std::wstring trayStatus() {
+    std::lock_guard lock(gStatusMutex);
+    std::wstring all;
+    for (const auto& s : gSlotStatus) {
+        if (s.empty()) continue;
+        if (!all.empty()) all += L" | ";
+        all += s;
+    }
+    return all.empty() ? gStatus : all;
+}
+
+// Journal : chaque ligne d'une session porte le nom de son appareil, les sessions tournant en parallèle.
+void logLine(const char* format, ...) {
+    char text[1024];
+    va_list args;
+    va_start(args, format);
+    vsnprintf(text, sizeof(text), format, args);
+    va_end(args);
+    std::fputs((tLogTag + text).c_str(), stdout);
 }
 
 uint64_t qpcFrequency() {
@@ -126,30 +175,55 @@ std::wstring findAdb(const Options& opt) {
 
 // Exécute adb sans fenêtre et renvoie sa sortie standard.
 bool runAdb(const Options& opt, const std::wstring& args, std::string* output) {
+    // Plusieurs sessions appellent adb : un appel à la fois, sinon un adb hériterait du tuyau
+    // d'un autre et sa sortie se perdrait.
+    static std::mutex adbMutex;
+    std::lock_guard adbLock(adbMutex);
     SECURITY_ATTRIBUTES sa{sizeof(sa), nullptr, TRUE};
     HANDLE readPipe = nullptr, writePipe = nullptr;
-    CreatePipe(&readPipe, &writePipe, &sa, 0);
-    SetHandleInformation(readPipe, HANDLE_FLAG_INHERIT, 0);
+    // Lancé par le service, l'agent ne peut parfois pas créer de tuyau : la sortie passe alors par
+    // un fichier du dossier de données, réservé à SYSTEM et aux administrateurs.
+    const bool piped = CreatePipe(&readPipe, &writePipe, &sa, 0) != FALSE;
+    const std::wstring outPath = piped ? std::wstring() : dataFilePath(L"adb-sortie.tmp");
+    if (piped) {
+        SetHandleInformation(readPipe, HANDLE_FLAG_INHERIT, 0);
+    } else {
+        writePipe = CreateFileW(outPath.c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, CREATE_ALWAYS,
+                                FILE_ATTRIBUTE_TEMPORARY, nullptr);
+        if (writePipe == INVALID_HANDLE_VALUE) writePipe = nullptr;
+    }
+    HANDLE nul = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING, 0, nullptr);
 
     STARTUPINFOW si{};
     si.cb = sizeof(si);
     si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdInput = nul;
     si.hStdOutput = writePipe;
     si.hStdError = writePipe;
     PROCESS_INFORMATION pi{};
     std::wstring cmd = L"\"" + findAdb(opt) + L"\" " + args;
     const BOOL started = CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
-    CloseHandle(writePipe);
+    if (piped || writePipe) CloseHandle(writePipe);
+    if (nul != INVALID_HANDLE_VALUE) CloseHandle(nul);
     if (!started) {
-        CloseHandle(readPipe);
+        logLine("adb : lancement impossible (%lu)\n", GetLastError());
+        if (piped) CloseHandle(readPipe);
         return false;
     }
     std::string text;
-    char buf[1024];
-    DWORD got = 0;
-    while (ReadFile(readPipe, buf, sizeof(buf), &got, nullptr) && got > 0) text.append(buf, got);
-    CloseHandle(readPipe);
+    if (piped) {
+        char buf[1024];
+        DWORD got = 0;
+        while (ReadFile(readPipe, buf, sizeof(buf), &got, nullptr) && got > 0) text.append(buf, got);
+        CloseHandle(readPipe);
+    }
     WaitForSingleObject(pi.hProcess, 10000);
+    if (!piped) {
+        std::ifstream in(outPath, std::ios::binary);
+        text.assign(std::istreambuf_iterator<char>(in), {});
+        in.close();
+        DeleteFileW(outPath.c_str());
+    }
     DWORD code = 1;
     GetExitCodeProcess(pi.hProcess, &code);
     CloseHandle(pi.hProcess);
@@ -165,12 +239,12 @@ int primaryIndex(const std::vector<OutputInfo>& outputs) {
     return 0;
 }
 
-const OutputInfo* pickOutput(const std::vector<OutputInfo>& outputs, int index) {
+const OutputInfo* pickOutput(const std::vector<OutputInfo>& outputs, int index, const std::wstring& virtualName) {
     if (outputs.empty()) return nullptr;
     if (index >= 0) return index < static_cast<int>(outputs.size()) ? &outputs[index] : nullptr;
-    // Jamais un second écran physique du PC : notre moniteur, sinon miroir de l'écran principal.
+    // Jamais un second écran physique du PC : le moniteur de cet appareil, sinon miroir de l'écran principal.
     for (const auto& o : outputs)
-        if (o.isVirtual) return &o;
+        if (!virtualName.empty() && o.deviceName == virtualName) return &o;
     return &outputs[primaryIndex(outputs)];
 }
 
@@ -197,7 +271,8 @@ uint32_t actualRefreshHz(const std::wstring& device) {
 
 // Choisit le mode du moniteur virtuel le plus proche de la tablette : d'abord sa résolution
 // exacte, sinon la plus grande de même format qui tient dedans. Réglage non persistant.
-void setBestMode(const std::wstring& device, uint32_t longSide, uint32_t shortSide, uint32_t fps, bool force = false) {
+// Renvoie le mode choisi (grand côté, petit côté), ou {0, 0} si aucun ne convient.
+std::pair<uint32_t, uint32_t> setBestMode(const std::wstring& device, uint32_t longSide, uint32_t shortSide, uint32_t fps, bool force = false) {
     DEVMODEW best{};
     double bestScore = -1;
     DEVMODEW mode{};
@@ -214,13 +289,14 @@ void setBestMode(const std::wstring& device, uint32_t longSide, uint32_t shortSi
     }
     DEVMODEW current{};
     current.dmSize = sizeof(current);
-    if (bestScore < 0 || !EnumDisplaySettingsW(device.c_str(), ENUM_CURRENT_SETTINGS, &current)) return;
+    if (bestScore < 0 || !EnumDisplaySettingsW(device.c_str(), ENUM_CURRENT_SETTINGS, &current)) return {0, 0};
+    const std::pair<uint32_t, uint32_t> chosen{std::max(best.dmPelsWidth, best.dmPelsHeight), std::min(best.dmPelsWidth, best.dmPelsHeight)};
     const uint32_t actual = actualRefreshHz(device);
     const bool sameSize = std::max(current.dmPelsWidth, current.dmPelsHeight) == std::max(best.dmPelsWidth, best.dmPelsHeight) &&
                           std::min(current.dmPelsWidth, current.dmPelsHeight) == std::min(best.dmPelsWidth, best.dmPelsHeight);
     const bool rateOk = current.dmDisplayFrequency == best.dmDisplayFrequency &&
                         (actual == 0 || std::abs(static_cast<int>(actual) - static_cast<int>(best.dmDisplayFrequency)) <= 1);
-    if (sameSize && rateOk && !force) return;
+    if (sameSize && rateOk && !force) return chosen;
     best.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_DISPLAYFREQUENCY;
     // Même mode annoncé mais autre fréquence réelle : CDS_RESET force Windows à le réappliquer.
     // Au retour de « Tablette seule », Windows reprend ensuite le mode de sa base d'affichage :
@@ -228,8 +304,9 @@ void setBestMode(const std::wstring& device, uint32_t longSide, uint32_t shortSi
     DWORD flags = sameSize || force ? CDS_RESET : 0;
     if (force) flags |= CDS_UPDATEREGISTRY;
     const LONG result = ChangeDisplaySettingsExW(device.c_str(), &best, nullptr, flags, nullptr);
-    std::printf("Mode de l'écran : %lux%lu à %lu Hz (résultat %ld)\n", best.dmPelsWidth, best.dmPelsHeight, best.dmDisplayFrequency, result);
+    logLine("Mode de l'écran : %lux%lu à %lu Hz (résultat %ld)\n", best.dmPelsWidth, best.dmPelsHeight, best.dmDisplayFrequency, result);
     Sleep(500);
+    return chosen;
 }
 
 // Mode « Tablette seule » : configuration temporaire, jamais enregistrée par Windows. Si
@@ -252,27 +329,50 @@ std::optional<DisplaySnapshot> queryDisplays() {
     return s;
 }
 
-bool useOnlyDisplay(const std::wstring& device) {
+// Garde les écrans des appareils (36Screenlink) et éteint ceux du PC. Avec deux appareils,
+// l'autre reste allumé : « seul » veut dire sans l'écran du PC.
+bool useOnlyDisplay(const std::wstring& device, bool keepOtherDevices) {
     auto current = queryDisplays();
     if (!current) return false;
-    for (const auto& path : current->paths) {
+    std::vector<std::wstring> virtualNames;
+    for (const auto& o : enumerateOutputs())
+        if (o.isVirtual) virtualNames.push_back(o.deviceName);
+    const auto gdiName = [](const DISPLAYCONFIG_PATH_INFO& path) {
         DISPLAYCONFIG_SOURCE_DEVICE_NAME name{};
         name.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
         name.header.size = sizeof(name);
         name.header.adapterId = path.sourceInfo.adapterId;
         name.header.id = path.sourceInfo.id;
-        if (DisplayConfigGetDeviceInfo(&name.header) != ERROR_SUCCESS || device != name.viewGdiDeviceName) continue;
-        auto modes = current->modes;
-        if (path.sourceInfo.modeInfoIdx != DISPLAYCONFIG_PATH_MODE_IDX_INVALID) modes[path.sourceInfo.modeInfoIdx].sourceMode.position = {0, 0};
-        DISPLAYCONFIG_PATH_INFO only = path;
-        if (!gSavedDisplays) gSavedDisplays = current;
-        const LONG result = SetDisplayConfig(1, &only, static_cast<UINT32>(modes.size()), modes.data(),
-                                             SDC_APPLY | SDC_USE_SUPPLIED_DISPLAY_CONFIG | SDC_ALLOW_CHANGES);
-        std::printf("Tablette seule : résultat %ld\n", result);
-        Sleep(800);
-        return result == ERROR_SUCCESS;
+        return DisplayConfigGetDeviceInfo(&name.header) == ERROR_SUCCESS ? std::wstring(name.viewGdiDeviceName) : std::wstring();
+    };
+    std::vector<DISPLAYCONFIG_PATH_INFO> kept;
+    POINTL origin{};
+    bool found = false;
+    for (const auto& path : current->paths) {
+        const std::wstring name = gdiName(path);
+        if (std::find(virtualNames.begin(), virtualNames.end(), name) == virtualNames.end()) continue;
+        if (!keepOtherDevices && name != device) continue;
+        kept.push_back(path);
+        if (name == device && path.sourceInfo.modeInfoIdx != DISPLAYCONFIG_PATH_MODE_IDX_INVALID) {
+            origin = current->modes[path.sourceInfo.modeInfoIdx].sourceMode.position;
+            found = true;
+        }
     }
-    return false;
+    if (!found) return false;
+    // L'écran de cet appareil devient le principal (origine 0,0), les autres gardent leur place relative.
+    auto modes = current->modes;
+    for (const auto& path : kept) {
+        if (path.sourceInfo.modeInfoIdx == DISPLAYCONFIG_PATH_MODE_IDX_INVALID) continue;
+        auto& pos = modes[path.sourceInfo.modeInfoIdx].sourceMode.position;
+        pos.x -= origin.x;
+        pos.y -= origin.y;
+    }
+    if (!gSavedDisplays) gSavedDisplays = current;
+    const LONG result = SetDisplayConfig(static_cast<UINT32>(kept.size()), kept.data(), static_cast<UINT32>(modes.size()), modes.data(),
+                                         SDC_APPLY | SDC_USE_SUPPLIED_DISPLAY_CONFIG | SDC_ALLOW_CHANGES);
+    logLine("Tablette seule : résultat %ld\n", result);
+    Sleep(800);
+    return result == ERROR_SUCCESS;
 }
 
 bool restoreDisplays() {
@@ -282,7 +382,7 @@ bool restoreDisplays() {
                                    SDC_APPLY | SDC_USE_SUPPLIED_DISPLAY_CONFIG | SDC_ALLOW_CHANGES);
     // Si le moniteur virtuel a changé entre-temps, Windows reprend sa dernière configuration.
     if (result != ERROR_SUCCESS) result = SetDisplayConfig(0, nullptr, 0, nullptr, SDC_APPLY | SDC_USE_DATABASE_CURRENT);
-    std::printf("Écrans du PC rétablis : résultat %ld\n", result);
+    logLine("Écrans du PC rétablis : résultat %ld\n", result);
     gSavedDisplays.reset();
     Sleep(800);
     return true;
@@ -299,7 +399,7 @@ void setOrientation(const std::wstring& device, bool portrait) {
     mode.dmDisplayOrientation = portrait ? DMDO_90 : DMDO_DEFAULT;
     mode.dmFields = DM_DISPLAYORIENTATION | DM_PELSWIDTH | DM_PELSHEIGHT;
     const LONG result = ChangeDisplaySettingsExW(device.c_str(), &mode, nullptr, 0, nullptr);
-    std::printf("Orientation de l'écran : %s (résultat %ld)\n", portrait ? "portrait" : "paysage", result);
+    logLine("Orientation de l'écran : %s (résultat %ld)\n", portrait ? "portrait" : "paysage", result);
     Sleep(500);
 }
 
@@ -325,19 +425,39 @@ std::unique_ptr<Encoder> openEncoder(const Options& opt, UINT vendorId, ID3D11De
     if (vendorId == 0x10DE && !opt.forceMediaFoundation) {
         auto nvenc = std::make_unique<NvencEncoder>();
         if (nvenc->open(device, input, cfg)) {
-            std::printf("Encodeur matériel : NVENC\n");
+            logLine("Encodeur matériel : NVENC\n");
             return nvenc;
         }
-        std::printf("NVENC : %s\n", nvenc->lastError().c_str());
+        logLine("NVENC : %s\n", nvenc->lastError().c_str());
     }
     auto generic = std::make_unique<MediaFoundationEncoder>();
     if (generic->open(device, input, cfg)) return generic;
-    std::printf("Media Foundation : %s\n", generic->lastError().c_str());
+    logLine("Media Foundation : %s\n", generic->lastError().c_str());
     return nullptr;
 }
 
 // Identifiant de contact réservé à la touche simulée sur une icône de la barre des tâches.
 constexpr uint8_t kWindowMoveContact = 200;
+
+// Un appareil joignable : en USB par son tunnel adb, ou en Wi-Fi par son adresse.
+struct Peer {
+    Link link = Link::Wifi;
+    std::string host;
+    uint16_t port = proto::kPort;
+    std::string serial;      // USB seulement
+    std::string wifiAddress; // adresse Wi-Fi de l'appareil, connue même en USB
+};
+
+struct Session {
+    int device = -1; // index de la clé d'appairage
+    int slot = 0;    // moniteur virtuel
+    Peer peer;
+    std::unique_ptr<SecureChannel> channel;
+    std::atomic<bool> restart{false};
+    std::atomic<bool> finished{false};
+    bool stopAll = false;
+    std::thread thread;
+};
 
 struct SessionStats {
     std::atomic<uint32_t> tabletFrames{0}, tabletAvgLat{0}, tabletP95Lat{0}, tabletAvgDec{0}, tabletDrops{0};
@@ -348,7 +468,9 @@ struct SessionStats {
     std::atomic<int64_t> lastPongUs{0};
 };
 
-void receiverLoop(SecureChannel& ch, TouchInjector& touch, KeyInjector& keys, PenInjector& pen, MouseInjector& mouse, WindowFollower& follower, DeviceHelper& helper, SessionStats& stats, std::atomic<bool>& alive) {
+void receiverLoop(Session& session, SecureChannel& ch, TouchInjector& touch, KeyInjector& keys, PenInjector& pen, MouseInjector& mouse, WindowFollower& follower, DeviceHelper& helper, SessionStats& stats, std::atomic<bool>& alive) {
+    tSlot = session.slot;
+    tLogTag = "[Appareil " + std::to_string(session.device + 1) + "] ";
     if (gSecureMode) attachInputDesktop();
     std::vector<uint8_t> msg;
     int64_t bestRtt = INT64_MAX;
@@ -360,7 +482,7 @@ void receiverLoop(SecureChannel& ch, TouchInjector& touch, KeyInjector& keys, Pe
         case proto::kSecureArmed:
             if (stats.secureDesktop && !stats.armed) {
                 stats.armed = true;
-                std::printf("Écran sécurisé : saisie autorisée après confirmation sur la tablette.\n");
+                logLine("Écran sécurisé : saisie autorisée après confirmation sur la tablette.\n");
             }
             break;
         case proto::kPong: {
@@ -425,13 +547,20 @@ void receiverLoop(SecureChannel& ch, TouchInjector& touch, KeyInjector& keys, Pe
         }
         case proto::kControl: {
             const uint8_t id = r.u8(), value = r.u8();
-            if (id == proto::kControlDisplay && value <= proto::kDisplayTabletOnly) gDisplayMode = value;
-            if (id == proto::kControlFps && (value == 60 || value == 120 || value == 144)) gFps = value;
-            gRestartSession = true;
+            if (id == proto::kControlDisplay && value <= proto::kDisplayDevicesOnly) gSettings[session.device].displayMode = value;
+            if (id == proto::kControlFps && (value == 60 || value == 120 || value == 144)) gSettings[session.device].fps = value;
+            session.restart = true;
             break;
         }
         case proto::kAudioRoute: {
             const bool onTablet = r.u8() != 0;
+            // Appareil visé : celui-ci, ou un autre appareil connecté choisi dans son menu.
+            int target = session.device;
+            if (r.has(1)) {
+                const uint8_t wanted = r.u8();
+                if (wanted != proto::kNoDevice && wanted < kMaxDevices) target = wanted;
+            }
+            if (onTablet) gAudioDevice = target;
             gAudioOnTablet = onTablet;
             saveAudioOnTablet(onTablet);
             break;
@@ -485,7 +614,7 @@ bool askPairingCode(uint32_t code) {
 }
 
 // Échange ECDH : rien n'est enregistré sans confirmation du même code des deux côtés.
-void tryPairing(SecureChannel& ch) {
+void tryPairing(SecureChannel& ch, int device, const Peer& peer) {
     // Une fenêtre au plus par minute, quelle que soit la réponse : un faux serveur du réseau
     // ne peut pas en faire surgir en rafale.
     static std::chrono::steady_clock::time_point lastAsked{};
@@ -499,108 +628,137 @@ void tryPairing(SecureChannel& ch) {
         lastAsked = std::chrono::steady_clock::now();
         return askPairingCode(code);
     };
-    if (ch.pair(psk, confirm) && savePsk(psk)) {
+    if (ch.pair(psk, confirm) && savePsk(device, psk)) {
         SecureZeroMemory(psk.data(), psk.size());
-        std::printf("Appairage réussi.\n");
+        if (!peer.serial.empty()) saveDeviceSerial(device, peer.serial);
+        if (!peer.wifiAddress.empty()) saveDeviceAddress(device, peer.wifiAddress);
+        logLine("Appairage réussi : appareil %d.\n", device + 1);
         trayClearAlert();
         return;
     }
-    std::printf("Appairage annulé : %s\n", ch.lastError().c_str());
+    logLine("Appairage annulé : %s\n", ch.lastError().c_str());
     // Tablette déjà appairée à un autre PC : elle attend que l'utilisateur l'autorise.
     if (!asked && ch.lastStatus() == proto::kStatusPairRefused)
-        trayAlert(L"Sur la tablette, ouvrez l'application et touchez Nouvel appairage.");
+        trayAlert(L"Sur l'appareil à ajouter, ouvrez l'application et touchez Nouvel appairage.");
 }
 
-// Une session complète. Renvoie false pour arrêter, true pour tenter une reconnexion.
-bool runSession(const Options& opt, const std::string& host) {
-    SecureChannel ch;
-    if (!ch.connectTo(host, proto::kPort, 3000)) {
-        std::printf("Connexion à %s : %s\n", host.c_str(), ch.lastError().c_str());
-        return true;
-    }
-
-    auto psk = loadPsk();
-    if (!psk) {
-        tryPairing(ch);
-        return true;
-    }
-    if (!ch.handshake(*psk)) {
-        // Tablette réinstallée ou autre appareil : la clé n'est jamais renvoyée, il faut un
-        // nouvel appairage. La tablette le refuse tant que l'utilisateur ne l'a pas demandé.
-        // Application fermée en USB : le tunnel d'adb accepte puis ferme sans réponse. Il faut
-        // attendre l'application, pas proposer un appairage.
-        if (ch.lastStatus() < 0) {
-            static bool reported = false;
-            if (!reported) std::printf("Authentification : %s (application fermée ?)\n", ch.lastError().c_str());
-            reported = true;
-            setStatus(L"Ouvrez l'application sur la tablette");
-            return true;
-        }
-        std::printf("Authentification : %s\n", ch.lastError().c_str());
-        ch.shutdown();
-        if (ch.lastStatus() == proto::kStatusBadVersion) {
-            trayAlert(L"Mettez à jour l'application 36Screenlink de la tablette.");
-            return true;
-        }
-        // Appairage seulement pour une tablette non appairée ou appairée à un autre PC (clé
-        // différente) ; celle-ci le refuse tant que l'utilisateur ne l'a pas autorisé.
-        if (ch.lastStatus() != proto::kStatusNotPaired && ch.lastStatus() != proto::kStatusOk) return true;
-        SecureChannel again;
-        if (again.connectTo(host, proto::kPort, 3000)) tryPairing(again);
-        return true;
-    }
-
+// Une session complète, sur un canal déjà authentifié. Renvoie false pour tout arrêter.
+bool runSession(const Options& opt, Session& s) {
+    SecureChannel& ch = *s.channel;
+    DeviceSettings& settings = gSettings[s.device];
 
     std::vector<uint8_t> msg;
     if (!ch.receive(msg) || msg.empty() || msg[0] != proto::kHello) return true;
     proto::Reader hello(msg.data() + 1, msg.size() - 1);
     const uint16_t tabletW = hello.u16(), tabletH = hello.u16(), tabletFps = hello.u16();
     const uint8_t codecs = hello.u8();
-    std::printf("Tablette : %ux%u, %u Hz, codecs 0x%02x\n", tabletW, tabletH, tabletFps, codecs);
+    // Type d'appareil, absent d'une ancienne application : tablette par défaut.
+    const uint8_t kind = hello.has(1) ? hello.u8() : proto::kKindTablet;
+    logLine("%s : %ux%u, %u Hz, codecs 0x%02x\n", kind == proto::kKindPhone ? "Téléphone" : "Tablette", tabletW, tabletH, tabletFps, codecs);
+    {
+        std::lock_guard lock(gConnectedMutex);
+        gConnected.emplace_back(s.device, kind);
+        ++gConnectedVersion;
+    }
+    // À la fin de la session, quel que soit le chemin de sortie.
+    struct Leave {
+        Session& s;
+        ~Leave() {
+            std::lock_guard lock(gConnectedMutex);
+            gConnected.erase(std::remove_if(gConnected.begin(), gConnected.end(), [this](const auto& d) { return d.first == s.device; }),
+                             gConnected.end());
+            ++gConnectedVersion;
+            gSlotAlone[s.slot] = false;
+            int mine = s.slot;
+            gExclusiveSlot.compare_exchange_strong(mine, -1);
+        }
+    } leave{s};
 
     bool secureDesktop = false;
     if (gSecureMode) {
         attachInputDesktop();
         secureDesktop = secureScreenActive();
     }
-    const uint8_t displayMode = gDisplayMode;
-    const uint32_t targetFps = gFps;
+    const uint8_t displayMode = settings.displayMode;
+    const uint32_t targetFps = settings.fps;
+    // Deux appareils peuvent arriver en même temps : la configuration d'affichage se change
+    // pour l'un, puis pour l'autre.
+    std::unique_lock displayLock(gDisplayMutex);
     // Après « Tablette seule », Windows peut remettre le moniteur virtuel à 60 Hz un peu plus
-    // tard tout en annonçant encore l'ancien mode : on réapplique alors le mode voulu.
-    const bool restored = displayMode != proto::kDisplayTabletOnly && restoreDisplays();
+    // tard tout en annonçant encore l'ancien mode : on réapplique alors le mode voulu. Les écrans
+    // du PC ne reviennent pas tant que l'autre appareil les veut éteints.
+    const bool otherAlone = gSlotAlone[1 - s.slot];
+    const bool alone = displayMode == proto::kDisplayTabletOnly || displayMode == proto::kDisplayDevicesOnly;
+    const bool restored = !alone && !otherAlone && restoreDisplays();
+    gSlotAlone[s.slot] = alone;
+    // « Tablette seule » : l'autre appareil rend la main et attend.
+    if (displayMode == proto::kDisplayTabletOnly) {
+        gExclusiveSlot = s.slot;
+        gStopSlot[1 - s.slot] = true;
+        // Son moniteur part tout de suite : retiré plus tard, Windows pourrait rallumer l'écran du PC.
+        if (gMonitor.raised(1 - s.slot)) {
+            gMonitor.release(1 - s.slot);
+            Sleep(800);
+        }
+    } else {
+        int mine = s.slot;
+        gExclusiveSlot.compare_exchange_strong(mine, -1);
+    }
+    gStopSlot[s.slot] = false;
     // Dupliquer montre l'écran du PC : le moniteur virtuel n'a plus lieu d'être.
+    std::wstring virtualName;
     if (displayMode == proto::kDisplayDuplicate) {
-        gMonitor.release();
+        gMonitor.release(s.slot);
         Sleep(800);
     } else {
-        gMonitor.raise();
+        virtualName = gMonitor.raise(s.slot);
     }
     auto outputs = enumerateOutputs();
     const bool mirrorPrimary = secureDesktop || displayMode == proto::kDisplayDuplicate;
     const int wanted = mirrorPrimary ? primaryIndex(outputs) : opt.outputIndex;
-    const OutputInfo* output = pickOutput(outputs, wanted);
+    const OutputInfo* output = pickOutput(outputs, wanted, virtualName);
     if (!output) {
-        std::printf("Aucun écran à capturer.\n");
+        logLine("Aucun écran à capturer.\n");
         return false;
     }
+    // Mode voulu pour le moniteur de cet appareil, dans son orientation : {0, 0} s'il n'y en a pas.
+    std::pair<uint32_t, uint32_t> wanted2{0, 0};
+    const bool portrait = tabletH > tabletW;
+    const auto modeDrifted = [&](const std::wstring& name) {
+        DEVMODEW current{};
+        current.dmSize = sizeof(current);
+        if (wanted2.first == 0 || !EnumDisplaySettingsW(name.c_str(), ENUM_CURRENT_SETTINGS, &current)) return false;
+        const uint32_t w = portrait ? wanted2.second : wanted2.first, h = portrait ? wanted2.first : wanted2.second;
+        return current.dmPelsWidth != w || current.dmPelsHeight != h;
+    };
     if (!mirrorPrimary && output->isVirtual) {
-        setBestMode(output->deviceName, std::max(tabletW, tabletH), std::min(tabletW, tabletH), std::min<uint32_t>(targetFps, tabletFps), restored);
-        setOrientation(output->deviceName, tabletH > tabletW);
-        if (displayMode == proto::kDisplayTabletOnly) useOnlyDisplay(output->deviceName);
+        const uint32_t fps = std::min<uint32_t>(targetFps, tabletFps);
+        wanted2 = setBestMode(output->deviceName, std::max(tabletW, tabletH), std::min(tabletW, tabletH), fps, restored);
+        setOrientation(output->deviceName, portrait);
+        // L'arrivée du moniteur d'un autre appareil fait parfois reprendre à Windows le mode par
+        // défaut de celui-ci : on le réapplique jusqu'à ce qu'il tienne.
+        for (int attempt = 0; attempt < 3 && modeDrifted(output->deviceName); ++attempt) {
+            logLine("Mode repris par Windows : réapplication\n");
+            Sleep(500);
+            setBestMode(output->deviceName, std::max(tabletW, tabletH), std::min(tabletW, tabletH), fps, true);
+            setOrientation(output->deviceName, portrait);
+        }
+        if (alone) useOnlyDisplay(output->deviceName, displayMode == proto::kDisplayDevicesOnly);
         // La rotation change les coordonnées de l'écran : on relit la description.
         outputs = enumerateOutputs();
-        output = pickOutput(outputs, wanted);
+        output = pickOutput(outputs, wanted, virtualName);
         if (!output) return true;
     }
+    displayLock.unlock();
     logw(L"Capture : %ls sur %ls%ls\n", output->deviceName.c_str(), output->adapterName.c_str(),
                  output->primary ? L" (miroir de l'écran principal)" : L"");
 
     Capturer cap;
     if (!cap.open(*output)) {
-        std::printf("Capture : %s\n", cap.lastError().c_str());
+        logLine("Capture : %s\n", cap.lastError().c_str());
         return true;
     }
-    std::printf("Capture : %ux%u, rotation %u\n", cap.width(), cap.height(), cap.rotationDegrees());
+    logLine("Capture : %ux%u, rotation %u\n", cap.width(), cap.height(), cap.rotationDegrees());
 
     const UINT width = cap.width() & ~1u, height = cap.height() & ~1u;
     ComPtr<ID3D11Texture2D> capTarget = makeTexture(cap.device(), width, height, D3D11_USAGE_DEFAULT, D3D11_BIND_RENDER_TARGET, 0);
@@ -654,7 +812,7 @@ bool runSession(const Options& opt, const std::string& host) {
         proto::Writer w(proto::kSecureState);
         w.u8(secureDesktop ? 1 : 0);
         if (!ch.send(w.data())) return true;
-        if (secureDesktop) std::printf("Écran sécurisé montré : saisie bloquée jusqu'à confirmation sur la tablette.\n");
+        if (secureDesktop) logLine("Écran sécurisé montré : saisie bloquée jusqu'à confirmation sur la tablette.\n");
     }
 
     // Utile seulement en écran étendu : ailleurs, aucune fenêtre n'est sur un autre écran visible.
@@ -669,15 +827,17 @@ bool runSession(const Options& opt, const std::string& host) {
     // Écrans, barre des tâches et champ de saisie : de quoi aider la saisie sur l'appareil.
     DeviceHelper helper;
     helper.start(ch, output->desktop, follower.running() && !secureDesktop);
-    std::thread receiver(receiverLoop, std::ref(ch), std::ref(touch), std::ref(keys), std::ref(pen), std::ref(mouse), std::ref(follower), std::ref(helper), std::ref(stats), std::ref(alive));
+    std::thread receiver(receiverLoop, std::ref(s), std::ref(ch), std::ref(touch), std::ref(keys), std::ref(pen), std::ref(mouse), std::ref(follower), std::ref(helper), std::ref(stats), std::ref(alive));
     // Session en Wi-Fi alors que le câble est branché : on repasse par l'USB, plus stable.
     std::atomic<bool> usbAvailable{false};
     std::thread usbWatcher([&] {
-        if (!opt.autoLink || opt.link != Link::Wifi) return;
+        const std::string serial = loadDeviceSerial(s.device);
+        if (!opt.autoLink || s.peer.link != Link::Wifi || serial.empty()) return;
+        const std::wstring args = L"-s " + std::wstring(serial.begin(), serial.end()) + L" get-state";
         while (alive && !gStop) {
             for (int i = 0; i < 50 && alive && !gStop; ++i) Sleep(100);
             std::string state;
-            if (alive && runAdb(opt, L"get-state", &state) && state.find("device") != std::string::npos) {
+            if (alive && runAdb(opt, args, &state) && state.find("device") != std::string::npos) {
                 usbAvailable = true;
                 return;
             }
@@ -689,7 +849,7 @@ bool runSession(const Options& opt, const std::string& host) {
             w.u64(nowUs());
             if (!ch.send(w.data())) break;
             if (static_cast<int64_t>(nowUs()) - stats.lastPongUs > 5'000'000) {
-                std::printf("Plus de réponse de la tablette.\n");
+                logLine("Plus de réponse de la tablette.\n");
                 break;
             }
             Sleep(250);
@@ -702,7 +862,9 @@ bool runSession(const Options& opt, const std::string& host) {
     const uint64_t intervalUs = 1'000'000 / cfg.fps;
     uint64_t lastEncode = 0, nextEncodeUs = 0, encoded = 0, bytesSent = 0, encodeUsSum = 0;
     uint64_t windowFrames = 0, windowBytes = 0, windowEncUs = 0, windowSendUs = 0, windowCaptured = 0, windowStart = nowUs();
-    uint64_t windowCount = 0, lastDesktopCheck = 0;
+    uint64_t windowCount = 0, lastDesktopCheck = 0, lastModeCheck = nowUs();
+    const std::wstring capturedName = output->deviceName;
+    const RECT capturedRect = output->desktop;
     uint32_t currentBitrate = cfg.bitrate;
     int calmSeconds = 0;
     const uint64_t startUs = nowUs();
@@ -710,9 +872,11 @@ bool runSession(const Options& opt, const std::string& host) {
     uint64_t pendingPts = 0;
     int refinements = 0;
     bool keepRunning = true;
-    std::wstring linkName = opt.link == Link::Usb ? L"USB" : L"Wi-Fi";
+    std::wstring linkName = std::wstring(L"Appareil ") + std::to_wstring(s.device + 1) + (s.peer.link == Link::Usb ? L" : USB" : L" : Wi-Fi");
     AudioStreamer audio;
     bool audioRunning = false, audioStateSent = false;
+    int audioTargetSent = -2;
+    uint32_t connectedSent = UINT32_MAX;
     uint64_t lastKeepAwake = 0;
     // La tablette est un écran utilisé : Windows ne doit pas éteindre les écrans, sinon la
     // composition s'arrête et l'image se fige. La demande seule ne suffit pas toujours :
@@ -729,9 +893,22 @@ bool runSession(const Options& opt, const std::string& host) {
 
     while (alive && !gStop) {
         // Nouveau mode ou nouvelle fréquence : la session suivante repart sur le bon écran.
-        if (gRestartSession.exchange(false)) break;
+        if (s.restart.exchange(false)) break;
+        if (gStopSlot[s.slot].exchange(false)) {
+            logLine("Écran laissé à l'autre appareil, en mode seul\n");
+            break;
+        }
+        // Appareils connectés : chacun connaît les autres, pour sa sortie son et son affichage.
+        if (gConnectedVersion != connectedSent) {
+            std::lock_guard lock(gConnectedMutex);
+            connectedSent = gConnectedVersion;
+            proto::Writer w(proto::kDevices);
+            w.u8(static_cast<uint8_t>(s.device)).u8(static_cast<uint8_t>(gConnected.size()));
+            for (const auto& [device, deviceKind] : gConnected) w.u8(static_cast<uint8_t>(device)).u8(deviceKind);
+            ch.send(w.data());
+        }
         if (usbAvailable) {
-            std::printf("Câble USB détecté : passage de la session en USB.\n");
+            logLine("Câble USB détecté : passage de la session en USB.\n");
             break;
         }
         if (!secureDesktop && nowUs() - lastKeepAwake > 30'000'000) {
@@ -744,8 +921,13 @@ bool runSession(const Options& opt, const std::string& host) {
                 SendInput(1, &nudge, sizeof(nudge));
             }
         }
-        const bool audioWanted = gAudioOnTablet;
-        if (audioWanted != audioRunning || !audioStateSent) {
+        // Son vers un seul appareil : celui qui l'a demandé, ou le premier connecté.
+        int noOwner = -1;
+        gAudioDevice.compare_exchange_strong(noOwner, s.device);
+        const bool audioWanted = gAudioOnTablet && gAudioDevice == s.device;
+        const int audioTarget = gAudioOnTablet ? gAudioDevice.load() : -1;
+        if (audioWanted != audioRunning || !audioStateSent || audioTarget != audioTargetSent) {
+            audioTargetSent = audioTarget;
             if (audioWanted && !audioRunning) {
                 audio.start([&](uint32_t rate, const int16_t* samples, size_t frames) {
                     proto::Writer w(proto::kAudio);
@@ -758,12 +940,32 @@ bool runSession(const Options& opt, const std::string& host) {
             audioRunning = audioWanted;
             audioStateSent = true;
             proto::Writer w(proto::kAudioState);
-            w.u8(audioWanted ? 1 : 0);
+            w.u8(audioWanted ? 1 : 0).u8(audioTarget < 0 ? proto::kNoDevice : static_cast<uint8_t>(audioTarget));
             ch.send(w.data());
         }
         if (opt.durationSec > 0 && nowUs() - startUs > static_cast<uint64_t>(opt.durationSec) * 1'000'000) {
             keepRunning = false;
             break;
+        }
+        // Un autre appareil qui arrive ou part peut faire changer de mode ce moniteur : la session
+        // repart alors sur le bon mode, plutôt que d'envoyer une image à la mauvaise taille.
+        if (nowUs() - lastModeCheck > 1'000'000) {
+            lastModeCheck = nowUs();
+            if (modeDrifted(capturedName)) {
+                logLine("Mode de l'écran changé par Windows : nouvelle session\n");
+                break;
+            }
+            // Un écran ajouté ou retiré décale souvent les autres : tactile, souris et liste des
+            // écrans doivent repartir de la nouvelle position.
+            DEVMODEW place{};
+            place.dmSize = sizeof(place);
+            if (EnumDisplaySettingsW(capturedName.c_str(), ENUM_CURRENT_SETTINGS, &place) &&
+                (place.dmPosition.x != capturedRect.left || place.dmPosition.y != capturedRect.top ||
+                 static_cast<LONG>(place.dmPelsWidth) != capturedRect.right - capturedRect.left ||
+                 static_cast<LONG>(place.dmPelsHeight) != capturedRect.bottom - capturedRect.top)) {
+                logLine("Écran déplacé par Windows : nouvelle session\n");
+                break;
+            }
         }
         if (gSecureMode && nowUs() - lastDesktopCheck > 250'000) {
             lastDesktopCheck = nowUs();
@@ -787,19 +989,19 @@ bool runSession(const Options& opt, const std::string& host) {
             // Sans suivi du bureau sécurisé, la capture attend simplement le retour de Windows.
             Sleep(gSecureMode ? 100 : 500);
             if (gSecureMode) attachInputDesktop();
-            if (!cap.open(*output) && gSecureMode) std::printf("Reprise de capture : %s\n", cap.lastError().c_str());
+            if (!cap.open(*output) && gSecureMode) logLine("Reprise de capture : %s\n", cap.lastError().c_str());
             forceIdr = true;
             continue;
         }
         if (result == Capturer::Result::Error) {
-            std::printf("Capture : %s\n", cap.lastError().c_str());
+            logLine("Capture : %s\n", cap.lastError().c_str());
             break;
         }
 
         if (frame.cursorShapeChanged) {
-            const auto& s = frame.cursorShape;
+            const auto& shape = frame.cursorShape;
             proto::Writer w(proto::kCursorShape);
-            w.u16(s.width).u16(s.height).u16(s.hotX).u16(s.hotY).bytes(s.bgra.data(), s.bgra.size());
+            w.u16(shape.width).u16(shape.height).u16(shape.hotX).u16(shape.hotY).bytes(shape.bgra.data(), shape.bgra.size());
             ch.send(w.data());
         }
         if (frame.cursorMoved) {
@@ -845,7 +1047,7 @@ bool runSession(const Options& opt, const std::string& host) {
                 return sent;
             });
             if (!ok) {
-                std::printf("Encodage : %s\n", encoder->lastError().c_str());
+                logLine("Encodage : %s\n", encoder->lastError().c_str());
                 break;
             }
             const uint64_t spent = nowUs() - before;
@@ -867,8 +1069,8 @@ bool runSession(const Options& opt, const std::string& host) {
             const double encMs = static_cast<double>(windowEncUs) / frames / 1000 - sendMs;
             // En mode icône, une ligne sur dix : le journal d'une longue session reste lisible.
             if (!opt.tray || windowCount++ % 10 == 0) {
-                std::printf("[%s] capture %5.1f fps  envoi %5.1f fps  %6.1f Mb/s  encodage %5.1f ms  socket %5.1f ms  latence moy %5.1f ms  p95 %5.1f ms  décodage %5.1f ms  pertes %u\n",
-                            opt.link == Link::Usb ? "USB" : "WiFi", static_cast<double>(windowCaptured) / secs,
+                logLine("[%s] capture %5.1f fps  envoi %5.1f fps  %6.1f Mb/s  encodage %5.1f ms  socket %5.1f ms  latence moy %5.1f ms  p95 %5.1f ms  décodage %5.1f ms  pertes %u\n",
+                            s.peer.link == Link::Usb ? "USB" : "WiFi", static_cast<double>(windowCaptured) / secs,
                             static_cast<double>(windowFrames) / secs, mbps, encMs, sendMs, stats.tabletAvgLat / 1000.0,
                             stats.tabletP95Lat / 1000.0, stats.tabletAvgDec / 1000.0, stats.tabletDrops.load());
                 std::fflush(stdout);
@@ -891,7 +1093,7 @@ bool runSession(const Options& opt, const std::string& host) {
                 calmSeconds = 0;
             }
             if (nextBitrate != currentBitrate && encoder->setBitrate(nextBitrate)) {
-                std::printf("Débit : %u -> %u Mb/s (socket %.1f ms, p95 %.1f ms)\n", currentBitrate / 1'000'000, nextBitrate / 1'000'000,
+                logLine("Débit : %u -> %u Mb/s (socket %.1f ms, p95 %.1f ms)\n", currentBitrate / 1'000'000, nextBitrate / 1'000'000,
                             sendMs, stats.tabletP95Lat / 1000.0);
                 std::fflush(stdout);
                 currentBitrate = nextBitrate;
@@ -918,12 +1120,11 @@ bool runSession(const Options& opt, const std::string& host) {
     pinger.join();
     receiver.join();
     usbWatcher.join();
-    gLastSessionEnd = std::chrono::steady_clock::now();
 
     if (encoded > 0) {
         const double secs = static_cast<double>(nowUs() - startUs) / 1e6;
-        std::printf("RESUME lien=%s images=%llu duree=%.1fs debit=%.1fMb/s encodage_envoi=%.2fms touch=%llu clavier=%llu stylet=%llu\n",
-                    opt.link == Link::Usb ? "usb" : "wifi", static_cast<unsigned long long>(encoded), secs,
+        logLine("RESUME lien=%s images=%llu duree=%.1fs debit=%.1fMb/s encodage_envoi=%.2fms touch=%llu clavier=%llu stylet=%llu\n",
+                    s.peer.link == Link::Usb ? "usb" : "wifi", static_cast<unsigned long long>(encoded), secs,
                     static_cast<double>(bytesSent) * 8 / 1e6 / secs, static_cast<double>(encodeUsSum) / static_cast<double>(encoded) / 1000,
                     static_cast<unsigned long long>(touch.received()), static_cast<unsigned long long>(keys.received()),
                     static_cast<unsigned long long>(pen.received()));
@@ -931,46 +1132,261 @@ bool runSession(const Options& opt, const std::string& host) {
     return keepRunning && !gStop;
 }
 
-std::string resolveHost(Options& opt) {
-    if (opt.autoLink) opt.link = runAdb(opt, L"forward tcp:7236 tcp:7236") ? Link::Usb : Link::Wifi;
-    if (opt.link == Link::Usb) {
-        if (!runAdb(opt, L"forward tcp:7236 tcp:7236")) return {};
-        // Mémorise l'adresse Wi-Fi tant que le lien USB la rend accessible.
-        std::string out;
-        if (runAdb(opt, L"shell ip -4 -o addr show wlan0", &out)) {
-            const auto p = out.find("inet ");
-            if (p != std::string::npos) saveTabletAddress(out.substr(p + 5, out.find('/', p) - p - 5));
+std::wstring widen(const std::string& s) { return std::wstring(s.begin(), s.end()); }
+
+// Adresse IPv4 Wi-Fi d'un appareil USB, lue par adb.
+std::string usbWifiAddress(const Options& opt, const std::string& serial) {
+    std::string out;
+    if (!runAdb(opt, L"-s " + widen(serial) + L" shell ip -4 -o addr show wlan0", &out)) return {};
+    const auto p = out.find("inet ");
+    if (p == std::string::npos) return {};
+    const auto end = out.find('/', p);
+    return end == std::string::npos ? std::string() : out.substr(p + 5, end - p - 5);
+}
+
+// Tous les appareils joignables : chaque appareil USB par son propre tunnel adb, puis ceux du Wi-Fi.
+std::vector<Peer> findPeers(const Options& opt, std::map<std::string, uint16_t>& usbPorts) {
+    std::vector<Peer> peers;
+    if (opt.autoLink || opt.link == Link::Usb) {
+        std::string list;
+        if (runAdb(opt, L"devices", &list)) {
+            size_t start = 0;
+            while (start < list.size()) {
+                size_t end = list.find('\n', start);
+                if (end == std::string::npos) end = list.size();
+                std::string line = list.substr(start, end - start);
+                start = end + 1;
+                if (!line.empty() && line.back() == '\r') line.pop_back();
+                const auto tab = line.find('\t');
+                if (tab == std::string::npos || line.substr(tab + 1) != "device") continue;
+                const std::string serial = line.substr(0, tab);
+                // Un numéro de série ne contient ni espace ni guillemet : rien d'autre ne part vers adb.
+                if (serial.find_first_of(" \"&|<>^%") != std::string::npos) continue;
+                auto port = usbPorts.find(serial);
+                if (port == usbPorts.end()) port = usbPorts.emplace(serial, static_cast<uint16_t>(kFirstUsbPort + usbPorts.size())).first;
+                if (!runAdb(opt, L"-s " + widen(serial) + L" forward tcp:" + std::to_wstring(port->second) + L" tcp:" + std::to_wstring(proto::kPort))) continue;
+                Peer p;
+                p.link = Link::Usb;
+                p.host = "127.0.0.1";
+                p.port = port->second;
+                p.serial = serial;
+                p.wifiAddress = usbWifiAddress(opt, serial);
+                peers.push_back(p);
+            }
         }
-        return "127.0.0.1";
     }
-    if (!opt.wifiHost.empty()) return opt.wifiHost;
-    std::string found = discoverTablet(3000);
-    if (found.empty()) return loadTabletAddress();
-    saveTabletAddress(found);
-    return found;
+    static std::string lastUsb;
+    std::string usb;
+    for (const auto& p : peers) usb += p.serial + (p.wifiAddress.empty() ? "" : " (" + p.wifiAddress + ")") + " ";
+    if (usb != lastUsb) logLine("Appareils USB : %s\n", usb.empty() ? "aucun" : usb.c_str());
+    lastUsb = usb;
+    if (opt.autoLink || opt.link == Link::Wifi) {
+        std::vector<std::string> addresses;
+        if (!opt.wifiHost.empty()) {
+            addresses.push_back(opt.wifiHost);
+        } else {
+            addresses = discoverDevices(1500);
+            for (int d = 0; d < kMaxDevices; ++d) {
+                const std::string known = loadDeviceAddress(d);
+                if (!known.empty() && loadPsk(d)) addresses.push_back(known);
+            }
+        }
+        for (const auto& address : addresses) {
+            // Un appareil branché en USB passe par le câble, pas par le Wi-Fi.
+            const bool viaUsb = std::any_of(peers.begin(), peers.end(), [&](const Peer& p) { return p.wifiAddress == address; });
+            const bool listed = std::any_of(peers.begin(), peers.end(), [&](const Peer& p) { return p.link == Link::Wifi && p.host == address; });
+            if (viaUsb || listed) continue;
+            Peer p;
+            p.host = address;
+            p.wifiAddress = address;
+            peers.push_back(p);
+        }
+    }
+    return peers;
+}
+
+// Cet appareil est-il déjà en session, par ce lien ou par un autre ? Une seconde connexion
+// authentifiée prendrait sa place sur l'appareil et couperait la session en cours.
+bool peerInSession(const Peer& peer, const std::vector<std::unique_ptr<Session>>& sessions) {
+    for (const auto& s : sessions) {
+        const std::string serial = loadDeviceSerial(s->device), address = loadDeviceAddress(s->device);
+        if (!peer.serial.empty() && (peer.serial == s->peer.serial || peer.serial == serial)) return true;
+        if (!peer.wifiAddress.empty() &&
+            (peer.wifiAddress == s->peer.wifiAddress || peer.wifiAddress == address || peer.wifiAddress == s->peer.host)) return true;
+    }
+    return false;
+}
+
+bool deviceInSession(int device, const std::vector<std::unique_ptr<Session>>& sessions) {
+    return std::any_of(sessions.begin(), sessions.end(), [device](const auto& s) { return s->device == device; });
+}
+
+// Emplacement de clé pour un nouvel appairage : celui de cet appareil s'il en avait un, sinon
+// un libre, sinon le premier qui n'est pas en session.
+int pairingSlotFor(const Peer& peer, const std::vector<std::unique_ptr<Session>>& sessions) {
+    for (int d = 0; d < kMaxDevices; ++d) {
+        if (deviceInSession(d, sessions)) continue;
+        if ((!peer.serial.empty() && loadDeviceSerial(d) == peer.serial) ||
+            (!peer.wifiAddress.empty() && loadDeviceAddress(d) == peer.wifiAddress)) return d;
+    }
+    for (int d = 0; d < kMaxDevices; ++d)
+        if (!loadPsk(d)) return d;
+    for (int d = 0; d < kMaxDevices; ++d)
+        if (!deviceInSession(d, sessions)) return d;
+    return -1;
+}
+
+// Se connecte à un appareil et retrouve sa clé parmi celles des appareils appairés. Renvoie le
+// canal authentifié et l'index de l'appareil, ou rien (appairage lancé si besoin).
+std::pair<std::unique_ptr<SecureChannel>, int> identify(const Peer& peer, const std::vector<std::unique_ptr<Session>>& sessions) {
+    // D'abord la clé de l'appareil déjà vu à ce numéro de série ou à cette adresse.
+    std::vector<int> order;
+    for (int d = 0; d < kMaxDevices; ++d)
+        if (loadPsk(d)) order.push_back(d);
+    std::stable_partition(order.begin(), order.end(), [&](int d) {
+        return (!peer.serial.empty() && loadDeviceSerial(d) == peer.serial) ||
+               (!peer.wifiAddress.empty() && loadDeviceAddress(d) == peer.wifiAddress);
+    });
+
+    bool skippedActive = false;
+    for (int d : order) {
+        // La bonne clé d'un appareil en session couperait sa session : on ne l'essaie pas.
+        if (deviceInSession(d, sessions)) {
+            skippedActive = true;
+            continue;
+        }
+        auto psk = loadPsk(d);
+        auto ch = std::make_unique<SecureChannel>();
+        if (!ch->connectTo(peer.host, peer.port, 3000)) {
+            logLine("Connexion à %s : %s\n", peer.link == Link::Usb ? peer.serial.c_str() : peer.host.c_str(), ch->lastError().c_str());
+            return {};
+        }
+        if (psk && ch->handshake(*psk)) {
+            if (peer.link == Link::Usb) saveDeviceSerial(d, peer.serial);
+            if (!peer.wifiAddress.empty()) saveDeviceAddress(d, peer.wifiAddress);
+            return {std::move(ch), d};
+        }
+        const int status = ch->lastStatus();
+        ch->shutdown();
+        // Application fermée en USB : le tunnel d'adb accepte puis ferme sans réponse. Il faut
+        // attendre l'application, pas proposer un appairage.
+        if (status < 0) {
+            static std::map<std::string, bool> reported;
+            const std::string who = peer.link == Link::Usb ? peer.serial : peer.host;
+            if (!reported[who]) logLine("Authentification %s : %s (application fermée ?)\n", who.c_str(), ch->lastError().c_str());
+            reported[who] = true;
+            setStatus(L"Ouvrez l'application sur l'appareil");
+            return {};
+        }
+        if (status == proto::kStatusBadVersion) {
+            trayAlert(L"Mettez à jour l'application 36Screenlink de l'appareil.");
+            return {};
+        }
+        // Appareil sans clé : inutile d'essayer les suivantes. Sinon, c'était la clé d'un autre.
+        if (status == proto::kStatusNotPaired) break;
+        if (status != proto::kStatusOk) return {};
+    }
+    // Peut-être l'appareil en session joint par un autre chemin : pas d'appairage s'il est impossible
+    // de les distinguer. Un numéro de série USB, lui, suffit à les distinguer.
+    if (skippedActive && peer.link != Link::Usb) {
+        const bool distinct = std::all_of(sessions.begin(), sessions.end(), [](const auto& s) {
+            return !loadDeviceAddress(s->device).empty() || !loadDeviceSerial(s->device).empty();
+        });
+        if (!distinct) return {};
+    }
+    const int device = pairingSlotFor(peer, sessions);
+    if (device < 0) return {};
+    // Un appareil qui refuse (déjà appairé ailleurs) n'est sollicité qu'une fois toutes les 30 s.
+    static std::map<std::string, std::chrono::steady_clock::time_point> lastPairing;
+    const std::string who = peer.link == Link::Usb ? peer.serial : peer.host;
+    const auto now = std::chrono::steady_clock::now();
+    const auto last = lastPairing.find(who);
+    if (last != lastPairing.end() && now - last->second < std::chrono::seconds(30)) return {};
+    lastPairing[who] = now;
+    SecureChannel ch;
+    if (ch.connectTo(peer.host, peer.port, 3000)) tryPairing(ch, device, peer);
+    return {};
 }
 
 void serviceLoop(Options opt) {
-    int backoffMs = 500;
-    while (!gStop) {
-        setStatus(L"Recherche de la tablette");
-        if (std::chrono::steady_clock::now() - gLastSessionEnd > kMonitorGrace) {
-            // Jamais d'écran du PC éteint sans tablette connectée.
-            restoreDisplays();
-            gDisplayMode = proto::kDisplayExtended;
-            gMonitor.release();
+    std::vector<std::unique_ptr<Session>> sessions;
+    std::map<std::string, uint16_t> usbPorts;
+    std::chrono::steady_clock::time_point slotEnd[VirtualMonitor::kSlots]{};
+    auto lastEnd = std::chrono::steady_clock::time_point{};
+    int lastSlot[kMaxDevices];
+    std::fill(std::begin(lastSlot), std::end(lastSlot), -1);
+    bool stopAll = false;
+
+    while (!gStop && !stopAll) {
+        const auto now = std::chrono::steady_clock::now();
+        for (auto it = sessions.begin(); it != sessions.end();) {
+            if (!(*it)->finished) {
+                ++it;
+                continue;
+            }
+            (*it)->thread.join();
+            stopAll |= (*it)->stopAll;
+            slotEnd[(*it)->slot] = lastEnd = std::chrono::steady_clock::now();
+            {
+                std::lock_guard lock(gStatusMutex);
+                gSlotStatus[(*it)->slot].clear();
+            }
+            it = sessions.erase(it);
         }
-        const std::string host = resolveHost(opt);
-        if (host.empty()) {
-            std::printf("Tablette introuvable.\n");
-        } else {
-            const auto start = std::chrono::steady_clock::now();
-            if (!runSession(opt, host)) return;
-            if (std::chrono::steady_clock::now() - start > std::chrono::seconds(10)) backoffMs = 500;
+        if (stopAll) break;
+        const auto slotUsed = [&](int slot) {
+            return std::any_of(sessions.begin(), sessions.end(), [slot](const auto& s) { return s->slot == slot; });
+        };
+        // Un moniteur sans appareil depuis un moment est retiré : Windows récupère les fenêtres.
+        for (int slot = 0; slot < VirtualMonitor::kSlots; ++slot) {
+            if (!slotUsed(slot) && gMonitor.raised(slot) && now - slotEnd[slot] > kMonitorGrace) gMonitor.release(slot);
         }
-        Sleep(backoffMs);
-        backoffMs = std::min(backoffMs * 2, 2000);
+        if (sessions.empty()) {
+            setStatus(L"Recherche des appareils");
+            if (now - lastEnd > kMonitorGrace) {
+                // Jamais d'écran du PC éteint sans appareil connecté.
+                std::lock_guard lock(gDisplayMutex);
+                restoreDisplays();
+                for (auto& settings : gSettings) settings.displayMode = proto::kDisplayExtended;
+            }
+        }
+
+        if (sessions.size() < VirtualMonitor::kSlots) {
+            for (const Peer& peer : findPeers(opt, usbPorts)) {
+                if (gStop || sessions.size() >= VirtualMonitor::kSlots) break;
+                if (peerInSession(peer, sessions)) continue;
+                // Un appareil a l'écran pour lui seul : les autres attendent.
+                if (gExclusiveSlot >= 0) break;
+                auto [channel, device] = identify(peer, sessions);
+                if (!channel) continue;
+                if (deviceInSession(device, sessions)) {
+                    channel->shutdown();
+                    continue;
+                }
+                auto session = std::make_unique<Session>();
+                session->device = device;
+                session->peer = peer;
+                session->channel = std::move(channel);
+                // Le même moniteur qu'à la dernière session : Windows a gardé sa place.
+                int slot = lastSlot[device];
+                if (slot < 0 || slotUsed(slot)) {
+                    for (slot = 0; slot < VirtualMonitor::kSlots && slotUsed(slot); ++slot) {}
+                }
+                session->slot = lastSlot[device] = slot;
+                Session* raw = session.get();
+                raw->thread = std::thread([&opt, raw] {
+                    tSlot = raw->slot;
+                    tLogTag = "[Appareil " + std::to_string(raw->device + 1) + "] ";
+                    raw->stopAll = !runSession(opt, *raw);
+                    raw->finished = true;
+                });
+                sessions.push_back(std::move(session));
+            }
+        }
+        for (int i = 0; i < 10 && !gStop; ++i) Sleep(100);
     }
+    gStop = true;
+    for (auto& s : sessions) s->thread.join();
 }
 
 Options parseArgs(int argc, wchar_t** argv) {
@@ -1118,7 +1534,7 @@ int wmain(int argc, wchar_t** argv) {
     HANDLE instance = CreateMutexW(nullptr, FALSE, kInstanceMutex);
     const DWORD instanceError = GetLastError();
     if (instanceError == ERROR_ALREADY_EXISTS || instanceError == ERROR_ACCESS_DENIED) {
-        std::printf("36Screenlink tourne déjà.\n");
+        logLine("36Screenlink tourne déjà.\n");
         if (opt.tray) MessageBoxW(nullptr, L"36Screenlink tourne déjà.", L"36Screenlink", MB_ICONINFORMATION);
         if (instance) CloseHandle(instance);
         WSACleanup();
@@ -1126,7 +1542,7 @@ int wmain(int argc, wchar_t** argv) {
     }
 
     gSystemMode = opt.system;
-    gFps = opt.fps;
+    for (auto& settings : gSettings) settings.fps = opt.fps;
 
     HANDLE quitEvent = CreateEventW(nullptr, TRUE, FALSE, kQuitEvent);
     std::thread quitWatcher([quitEvent] {
@@ -1144,7 +1560,7 @@ int wmain(int argc, wchar_t** argv) {
         if (opt.virtualMonitor && opt.outputIndex < 0) gMonitor.start();
         std::thread worker(serviceLoop, opt);
         TrayConfig tray;
-        tray.status = [] { std::lock_guard lock(gStatusMutex); return gStatus; };
+        tray.status = trayStatus;
         tray.onQuit = [] { gStop = true; };
         tray.onUserQuit = [] { gUserQuit = true; };
         tray.audioOnTablet = [] { return gAudioOnTablet.load(); };

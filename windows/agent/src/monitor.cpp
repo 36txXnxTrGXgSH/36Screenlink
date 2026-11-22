@@ -2,8 +2,10 @@
 
 #include <shellapi.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <filesystem>
+#include <vector>
 
 #include "capture.h"
 #include "store.h"
@@ -11,31 +13,39 @@
 
 namespace {
 
-bool hasVirtualOutput() {
+std::vector<std::wstring> virtualOutputs() {
+    std::vector<std::wstring> names;
     for (const auto& o : enumerateOutputs())
-        if (o.isVirtual) return true;
-    return false;
+        if (o.isVirtual) names.push_back(o.deviceName);
+    return names;
+}
+
+bool contains(const std::vector<std::wstring>& list, const std::wstring& name) {
+    return std::find(list.begin(), list.end(), name) != list.end();
 }
 
 } // namespace
 
 VirtualMonitor::~VirtualMonitor() {
     if (helper_) CloseHandle(helper_);
-    if (raiseEvent_) CloseHandle(raiseEvent_);
-    if (releaseEvent_) CloseHandle(releaseEvent_);
+    for (int i = 0; i < kSlots; ++i) {
+        if (raiseEvents_[i]) CloseHandle(raiseEvents_[i]);
+        if (releaseEvents_[i]) CloseHandle(releaseEvents_[i]);
+    }
 }
 
 void VirtualMonitor::start() {
-    if (hasVirtualOutput()) return;
-
     const std::filesystem::path exe = std::filesystem::path(exeDirectory()) / L"36ScreenlinkDevice.exe";
     if (!std::filesystem::exists(exe)) {
         std::printf("36ScreenlinkDevice.exe absent : miroir de l'écran principal.\n");
         return;
     }
     const std::wstring pid = std::to_wstring(GetCurrentProcessId());
-    raiseEvent_ = CreateEventW(nullptr, FALSE, FALSE, (L"Local\\ScreenlinkRaise-" + pid).c_str());
-    releaseEvent_ = CreateEventW(nullptr, FALSE, FALSE, (L"Local\\ScreenlinkRelease-" + pid).c_str());
+    for (int i = 0; i < kSlots; ++i) {
+        const std::wstring suffix = pid + L"-" + std::to_wstring(i);
+        raiseEvents_[i] = CreateEventW(nullptr, FALSE, FALSE, (L"Local\\ScreenlinkRaise-" + suffix).c_str());
+        releaseEvents_[i] = CreateEventW(nullptr, FALSE, FALSE, (L"Local\\ScreenlinkRelease-" + suffix).c_str());
+    }
 
     const std::wstring params = L"--parent " + pid;
     if (gSystemMode) {
@@ -68,19 +78,38 @@ void VirtualMonitor::start() {
     managed_ = true;
 }
 
-void VirtualMonitor::raise() {
-    if (!managed_ || raised_) return;
-    SetEvent(raiseEvent_);
-    raised_ = true;
-    for (int i = 0; i < 100 && !hasVirtualOutput(); ++i) Sleep(100);
-    if (!hasVirtualOutput()) {
-        std::printf("Le moniteur virtuel n'est pas apparu : pilote installé ?\n");
-        trayAlert(L"Le moniteur virtuel n'est pas apparu. Vérifiez que le pilote est installé.");
+std::wstring VirtualMonitor::raise(int slot) {
+    // Un moniteur à la fois : celui qui apparaît est forcément celui qu'on vient de demander.
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!managed_) return {};
+    auto present = virtualOutputs();
+    if (raised_[slot] && contains(present, names_[slot])) return names_[slot];
+
+    const int other = 1 - slot;
+    std::vector<std::wstring> before = present;
+    SetEvent(raiseEvents_[slot]);
+    raised_[slot] = true;
+    for (int i = 0; i < 100; ++i) {
+        present = virtualOutputs();
+        for (const auto& name : present) {
+            // Le nouveau venu, ou à défaut celui que l'autre emplacement n'occupe pas.
+            const bool otherOwns = raised_[other] && name == names_[other];
+            if (!otherOwns && (!contains(before, name) || i > 20)) {
+                names_[slot] = name;
+                return name;
+            }
+        }
+        Sleep(100);
     }
+    std::printf("Le moniteur virtuel n'est pas apparu : pilote installé ?\n");
+    trayAlert(L"Le moniteur virtuel n'est pas apparu. Vérifiez que le pilote est installé.");
+    return {};
 }
 
-void VirtualMonitor::release() {
-    if (!managed_ || !raised_) return;
-    SetEvent(releaseEvent_);
-    raised_ = false;
+void VirtualMonitor::release(int slot) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!managed_ || !raised_[slot]) return;
+    SetEvent(releaseEvents_[slot]);
+    raised_[slot] = false;
+    names_[slot].clear();
 }

@@ -44,7 +44,10 @@ class StreamServer(
         fun onCursorShape(width: Int, height: Int, hotX: Int, hotY: Int, bgra: ByteArray, offset: Int)
         /** Montre le code et bloque jusqu'à la réponse de l'utilisateur. */
         fun confirmPairing(code: Int): Boolean
-        fun onAudioRoute(onTablet: Boolean)
+        /** Son sur cet appareil ; target : appareil qui reçoit le son, NO_DEVICE pour le PC. */
+        fun onAudioRoute(onTablet: Boolean, target: Int)
+        /** Appareils connectés au PC : self est cet appareil, others les autres (id, type). */
+        fun onDevices(self: Int, others: List<Pair<Int, Int>>)
         fun onControlState(displayMode: Int, fps: Int)
         fun onLink(usb: Boolean)
         fun onStats(fps: Int, latencyMs: Int)
@@ -53,9 +56,10 @@ class StreamServer(
         /** Champ de saisie qui a le focus sur cet écran, en 0..65535 ; null s'il n'y en a pas. */
         fun onTextFocus(area: android.graphics.Rect?)
         /** Écrans du PC en pixels du bureau, index de l'appareil et sa barre des tâches en 0..65535. */
-        fun onScreens(screens: List<android.graphics.Rect>, device: Int, taskbar: android.graphics.Rect?)
+        fun onScreens(screens: List<android.graphics.Rect>, device: Int, taskbar: android.graphics.Rect?, devices: List<Boolean>)
     }
 
+    private val kind = if (context.resources.configuration.smallestScreenWidthDp < 600) Protocol.KIND_PHONE else Protocol.KIND_TABLET
     private val pairing = PairingStore(File(context.noBackupFilesDir, "pairing.v2"))
     private val nsd = context.getSystemService(NsdManager::class.java)
     private val touchSender = Executors.newSingleThreadExecutor()
@@ -159,8 +163,9 @@ class StreamServer(
         client?.let { socket -> touchSender.execute { runCatching { socket.close() } } }
     }
 
-    fun requestAudioRoute(onTablet: Boolean) {
-        sendInput(byteArrayOf(Protocol.MSG_AUDIO_ROUTE.toByte(), if (onTablet) 1 else 0))
+    /** Son vers le PC, cet appareil ou un autre appareil connecté (target). */
+    fun requestAudioRoute(onTablet: Boolean, target: Int = Protocol.NO_DEVICE) {
+        sendInput(byteArrayOf(Protocol.MSG_AUDIO_ROUTE.toByte(), if (onTablet) 1 else 0, target.toByte()))
     }
 
     /** L'utilisateur a confirmé son identité : le PC accepte la saisie sur l'écran sécurisé. */
@@ -269,8 +274,9 @@ class StreamServer(
                 startFeeder()
 
                 Log.i(TAG, "Session ouverte, écran ${screenWidth}x$screenHeight")
-                send(ByteBuffer.allocate(8).put(Protocol.MSG_HELLO.toByte()).putShort(screenWidth.toShort())
-                    .putShort(screenHeight.toShort()).putShort(maxFps.toShort()).put(3).array())
+                // Type d'appareil en fin de message : un ancien agent l'ignore.
+                send(ByteBuffer.allocate(9).put(Protocol.MSG_HELLO.toByte()).putShort(screenWidth.toShort())
+                    .putShort(screenHeight.toShort()).putShort(maxFps.toShort()).put(3).put(kind.toByte()).array())
 
                 var buffer = ByteArray(1024 * 1024)
                 while (running) {
@@ -411,8 +417,17 @@ class StreamServer(
             Protocol.MSG_AUDIO_STATE -> {
                 if (b.remaining() < 1) return
                 val onTablet = b.get().toInt() != 0
+                val target = if (b.remaining() >= 1) b.get().toInt() and 0xFF else Protocol.NO_DEVICE
                 if (!onTablet) audio.stop()
-                ui.onAudioRoute(onTablet)
+                ui.onAudioRoute(onTablet, target)
+            }
+            Protocol.MSG_DEVICES -> {
+                if (b.remaining() < 2) return
+                val self = b.get().toInt() and 0xFF
+                val n = b.get().toInt() and 0xFF
+                if (n > MAX_SCREENS || b.remaining() < n * 2) return
+                val all = List(n) { (b.get().toInt() and 0xFF) to (b.get().toInt() and 0xFF) }
+                ui.onDevices(self, all.filter { it.first != self })
             }
             Protocol.MSG_SECURE_STATE -> if (b.remaining() >= 1) ui.onSecureScreen(b.get().toInt() != 0)
             Protocol.MSG_STREAM_CONFIG -> {
@@ -466,8 +481,10 @@ class StreamServer(
                     android.graphics.Rect(x, y, x + w, y + h)
                 }
                 val taskbar = readArea(b)
-                if (n < 2 || device >= n || taskbar == null) ui.onScreens(emptyList(), 0, null)
-                else ui.onScreens(screens, device, taskbar)
+                // Écrans d'appareils : ajoutés plus tard au message, absents d'un ancien agent.
+                val devices = if (b.remaining() >= n) List(n) { b.get().toInt() != 0 } else List(n) { false }
+                if (n < 2 || device >= n || taskbar == null) ui.onScreens(emptyList(), 0, null, emptyList())
+                else ui.onScreens(screens, device, taskbar, devices)
             }
         }
     }
