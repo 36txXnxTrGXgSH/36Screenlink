@@ -17,6 +17,10 @@ public:
     ~SecureChannel();
 
     bool connectTo(const std::string& host, uint16_t port, int timeoutMs);
+    // Télévision : elle se connecte au PC en WebSocket, le seul réseau d'une application web.
+    // Le socket a déjà lu la demande HTTP ; webSocketKey est son en-tête Sec-WebSocket-Key.
+    // Le protocole chiffré passe ensuite tel quel dans les messages WebSocket.
+    bool adoptWebSocket(SOCKET socket, const std::string& webSocketKey);
     // Échange ECDH. `confirm` montre le code à l'utilisateur, qui le compare à celui de la
     // tablette : c'est ce qui écarte une application malveillante à l'écoute du port.
     bool pair(Key256& psk, const std::function<bool(uint32_t code)>& confirm);
@@ -31,6 +35,9 @@ public:
 private:
     bool writeAll(const void* p, size_t n);
     bool readAll(void* p, size_t n);
+    bool writeRaw(const void* p, size_t n);
+    bool readRaw(void* p, size_t n);
+    bool readFrame();
     bool readStatus();
 
     SOCKET sock_ = INVALID_SOCKET;
@@ -40,4 +47,7 @@ private:
     std::vector<uint8_t> txBuf_, rxBuf_;
     std::string error_;
     int status_ = -1;
+    bool webSocket_ = false;
+    std::vector<uint8_t> wsIn_;
+    size_t wsPos_ = 0;
 };

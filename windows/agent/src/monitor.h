@@ -6,10 +6,10 @@
 
 // Pilote 36ScreenlinkDevice.exe, seul composant élevé : une invite UAC au démarrage,
 // puis les moniteurs suivent les appareils sans nouvelle invite. L'assistant s'arrête avec l'agent.
-// Deux emplacements, un par appareil connecté en même temps.
+// Trois emplacements, un par appareil connecté en même temps (tablette, téléphone, télévision).
 class VirtualMonitor {
 public:
-    static constexpr int kSlots = 2;
+    static constexpr int kSlots = 3;
 
     ~VirtualMonitor();
     // Lance l'assistant. Sans lui, chaque appareil montre l'écran principal.

@@ -82,7 +82,12 @@ bool NvencEncoder::open(ID3D11Device* device, ID3D11Texture2D* input, EncoderCon
         auto& h = config.encodeCodecConfig.h264Config;
         h.idrPeriod = NVENC_INFINITE_GOPLENGTH;
         h.repeatSPSPPS = 1;
+        // Une seule image de référence, et restriction de flux déclarée : sans elle, le décodeur
+        // suppose un réordonnancement possible et retient jusqu'à 4 images avant d'afficher
+        // (environ 67 ms à 60 Hz, mesuré sur un téléviseur Samsung). Le flux n'a pas d'image B.
+        h.maxNumRefFrames = 1;
         auto& vui = h.h264VUIParameters;
+        vui.bitstreamRestrictionFlag = 1;
         vui.videoSignalTypePresentFlag = 1;
         vui.videoFormat = NV_ENC_VUI_VIDEO_FORMAT_UNSPECIFIED;
         vui.colourDescriptionPresentFlag = 1;

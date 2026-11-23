@@ -4,7 +4,7 @@
 //
 // Sans argument : moniteur actif jusqu'à Ctrl+C.
 // --parent <pid> : piloté par l'agent via deux événements par moniteur, arrêt à la fin de l'agent.
-// Deux moniteurs au plus, un par appareil : chacun est un périphérique logiciel distinct,
+// Trois moniteurs au plus, un par appareil : chacun est un périphérique logiciel distinct,
 // servi par le même pilote, et Windows mémorise la place de chacun.
 #include <windows.h>
 #include <swdevice.h>
@@ -28,9 +28,9 @@ VOID WINAPI onCreated(HSWDEVICE, HRESULT result, PVOID, PCWSTR) {
     SetEvent(gCreated);
 }
 
-constexpr int kSlots = 2;
+constexpr int kSlots = 3;
 // Le premier garde l'identifiant d'avant : Windows retrouve la disposition déjà réglée.
-const wchar_t* const kInstanceIds[kSlots] = {L"36ScreenlinkIdd", L"36ScreenlinkIdd2"};
+const wchar_t* const kInstanceIds[kSlots] = {L"36ScreenlinkIdd", L"36ScreenlinkIdd2", L"36ScreenlinkIdd3"};
 
 HSWDEVICE createDevice(int slot = 0) {
     SW_DEVICE_CREATE_INFO info = {};

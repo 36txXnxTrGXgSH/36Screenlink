@@ -7,6 +7,8 @@
 namespace proto {
 
 inline constexpr uint16_t kPort = 7236;
+// Télévision : c'est elle qui se connecte au PC, en WebSocket sur ce port.
+inline constexpr uint16_t kTvPort = 7240;
 // v5 : clés de session dérivées aussi d'un ECDH éphémère (confidentialité persistante).
 inline constexpr uint8_t kVersion = 5;
 inline constexpr char kMagic[4] = {'S', '3', '6', 'X'};
@@ -48,6 +50,7 @@ enum Msg : uint8_t {
                        //      puis n × u8 (1 si l'écran est celui d'un appareil 36Screenlink)
     kWindowMove = 26,  // T->A u16 x, u16 y de l'icône touchée (0..65535), u8 index de l'écran voulu
     kDevices = 27,     // A->T u8 cet appareil, u8 n, n * (u8 appareil, u8 type) : les appareils connectés
+    kDeviceLog = 28,   // T->A texte UTF-8 court : journal de l'appareil (télévision), écrit dans celui du PC
 };
 
 enum KeyboardFlags : uint8_t { kKeyboardVisible = 1, kKeyboardAuto = 2 };
@@ -55,7 +58,7 @@ enum KeyboardFlags : uint8_t { kKeyboardVisible = 1, kKeyboardAuto = 2 };
 enum Control : uint8_t { kControlDisplay = 1, kControlFps = 2 };
 // 2 : cet appareil seul, les autres écrans éteints. 3 : les appareils seuls, sans l'écran du PC.
 enum DisplayMode : uint8_t { kDisplayExtended = 0, kDisplayDuplicate = 1, kDisplayTabletOnly = 2, kDisplayDevicesOnly = 3 };
-enum DeviceKind : uint8_t { kKindTablet = 0, kKindPhone = 1 };
+enum DeviceKind : uint8_t { kKindTablet = 0, kKindPhone = 1, kKindTv = 2 };
 inline constexpr uint8_t kNoDevice = 0xFF;
 
 enum MouseButton : uint8_t { kMouseLeft = 1, kMouseRight = 2, kMouseMiddle = 4 };

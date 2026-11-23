@@ -85,7 +85,6 @@ std::wstring VirtualMonitor::raise(int slot) {
     auto present = virtualOutputs();
     if (raised_[slot] && contains(present, names_[slot])) return names_[slot];
 
-    const int other = 1 - slot;
     std::vector<std::wstring> before = present;
     SetEvent(raiseEvents_[slot]);
     raised_[slot] = true;
@@ -93,7 +92,9 @@ std::wstring VirtualMonitor::raise(int slot) {
         present = virtualOutputs();
         for (const auto& name : present) {
             // Le nouveau venu, ou à défaut celui que l'autre emplacement n'occupe pas.
-            const bool otherOwns = raised_[other] && name == names_[other];
+            bool otherOwns = false;
+            for (int other = 0; other < kSlots; ++other)
+                otherOwns |= other != slot && raised_[other] && name == names_[other];
             if (!otherOwns && (!contains(before, name) || i > 20)) {
                 names_[slot] = name;
                 return name;

@@ -50,6 +50,18 @@ Une tablette et un téléphone peuvent être connectés ensemble, en USB ou en W
 - **Arrivée ou départ d'un appareil :** Windows réorganise les écrans. L'image de l'autre appareil se coupe alors environ deux secondes, le temps de repartir à la bonne place.
 - **Affichage :** *Tablette seule* (ou *Téléphone seul*) ne garde que cet appareil : l'écran du PC s'éteint et l'autre appareil attend. *Tablette et téléphone* éteint seulement l'écran du PC : les deux appareils restent allumés. *Étendu* rallume tout.
 
+## Télévision Samsung (Tizen)
+
+Un téléviseur Samsung sous Tizen 5.5 ou plus récent peut lui aussi afficher l'écran du PC, à faible latence (environ 80 ms de bout en bout, 1080p à 60 images/s, jusqu'à 30 Mb/s). L'image passe directement au décodeur matériel du téléviseur par son lecteur WebAssembly, sans le tampon d'une demi-seconde d'un lecteur web ordinaire.
+
+- **Réseau local seulement :** le téléviseur ne contacte que le PC, sur le réseau local, en flux chiffré. Rien ne sort vers Internet, aucun compte, aucun serveur.
+- **Connexion :** ouvrez l'application sur le téléviseur ; elle cherche le PC sur le réseau et affiche un code à 6 chiffres. Comparez-le avec celui du PC, puis confirmez avec la touche **OK** de la télécommande.
+- **Télécommande :** OK confirme l'appairage · touche rouge pour un nouvel appairage · Info affiche les mesures · Retour quitte.
+- **Qualité et retard :** l'image est fluide et nette ; le retard d'environ 80 ms convient pour regarder, présenter ou suivre un tableau de bord, mais reste trop élevé pour un travail fin à la souris. Environ 70 ms viennent du lecteur vidéo du téléviseur lui-même ; pour aller plus bas, il faut un câble HDMI et le *Mode Jeu*.
+- **Réglage conseillé du téléviseur :** désactivez *Clarté de l'image* (Auto Motion Plus), *Contraste numérique* et *Amélioration du contraste* : ces traitements ajoutent du retard après l'affichage. En mode d'image *Dynamique* ou *Vif*, les couleurs paraissent criardes ; *Film* ou *Standard* donne un rendu fidèle.
+
+L'application téléviseur s'installe en **mode développeur** (elle n'est pas publiée sur le magasin Samsung) : voir le dossier [`tv/`](tv/) et son script `deploy-tv.ps1`. C'est une prise en charge avancée, testée sur un Samsung UE55TU8005 (2020, Tizen 5.5).
+
 ## Utilisation
 
 Sur l'appareil, **glissez depuis le bord gauche vers le centre** pour ouvrir le menu en verre dépoli. Touchez à côté ou la croix pour le refermer. L'épingle le garde ouvert : les touches à côté repartent alors vers Windows.

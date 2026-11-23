@@ -1,5 +1,6 @@
 // Agent Windows : capture d'un écran, encodage NVENC, envoi chiffré vers la tablette.
 #include <winsock2.h>
+#include <ws2tcpip.h>
 #include <windows.h>
 #include <shellscalingapi.h>
 #include <timeapi.h>
@@ -7,6 +8,7 @@
 #include <io.h>
 
 #include <algorithm>
+#include <cctype>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -41,7 +43,7 @@
 
 namespace {
 
-enum class Link { Usb, Wifi };
+enum class Link { Usb, Wifi, Tv };
 
 struct Options {
     Link link = Link::Usb;
@@ -78,6 +80,10 @@ VirtualMonitor gMonitor;
 constexpr auto kMonitorGrace = std::chrono::seconds(10);
 constexpr uint32_t kMinBitrate = 15'000'000;
 constexpr uint32_t kCongestedLatUs = 150'000;
+// Télévision : environ 85 ms en moyenne au repos, P95 vers 130 ms. Au-delà du premier seuil, son
+// décodeur ne suit plus ; en deçà du second, le débit peut remonter doucement.
+constexpr uint32_t kTvCongestedLatUs = 250'000;
+constexpr uint32_t kTvCalmLatUs = 180'000;
 // Premier port local des tunnels adb, un par appareil USB.
 constexpr uint16_t kFirstUsbPort = 7237;
 
@@ -593,6 +599,14 @@ void receiverLoop(Session& session, SecureChannel& ch, TouchInjector& touch, Key
             touch.apply({Contact{kWindowMoveContact, false, x, y}});
             break;
         }
+        case proto::kDeviceLog: {
+            // Journal d'un appareil sans console (télévision) : une ligne courte, sans caractère de contrôle.
+            std::string text(reinterpret_cast<const char*>(msg.data() + 1), std::min<size_t>(msg.size() - 1, 300));
+            for (char& c : text)
+                if (static_cast<unsigned char>(c) < 0x20) c = ' ';
+            logLine("Appareil : %s\n", text.c_str());
+            break;
+        }
         case proto::kText:
             if (!inputAllowed) break;
             keys.text(std::string(reinterpret_cast<const char*>(msg.data() + 1), msg.size() - 1));
@@ -609,7 +623,7 @@ constexpr auto kPairingRetry = std::chrono::seconds(60);
 
 bool askPairingCode(uint32_t code) {
     wchar_t text[220];
-    swprintf_s(text, L"Code d'appairage : %06u\n\nLe même code s'affiche-t-il sur la tablette ?\nRépondez Non s'il est différent.", code);
+    swprintf_s(text, L"Code d'appairage : %06u\n\nLe même code s'affiche-t-il sur l'appareil ?\nRépondez Non s'il est différent.", code);
     return MessageBoxW(nullptr, text, L"36Screenlink", MB_YESNO | MB_ICONQUESTION | MB_TOPMOST | MB_SETFOREGROUND) == IDYES;
 }
 
@@ -654,7 +668,8 @@ bool runSession(const Options& opt, Session& s) {
     const uint8_t codecs = hello.u8();
     // Type d'appareil, absent d'une ancienne application : tablette par défaut.
     const uint8_t kind = hello.has(1) ? hello.u8() : proto::kKindTablet;
-    logLine("%s : %ux%u, %u Hz, codecs 0x%02x\n", kind == proto::kKindPhone ? "Téléphone" : "Tablette", tabletW, tabletH, tabletFps, codecs);
+    logLine("%s : %ux%u, %u Hz, codecs 0x%02x\n", kind == proto::kKindPhone ? "Téléphone" : kind == proto::kKindTv ? "Télévision" : "Tablette",
+            tabletW, tabletH, tabletFps, codecs);
     {
         std::lock_guard lock(gConnectedMutex);
         gConnected.emplace_back(s.device, kind);
@@ -687,18 +702,23 @@ bool runSession(const Options& opt, Session& s) {
     // Après « Tablette seule », Windows peut remettre le moniteur virtuel à 60 Hz un peu plus
     // tard tout en annonçant encore l'ancien mode : on réapplique alors le mode voulu. Les écrans
     // du PC ne reviennent pas tant que l'autre appareil les veut éteints.
-    const bool otherAlone = gSlotAlone[1 - s.slot];
+    bool otherAlone = false;
+    for (int slot = 0; slot < VirtualMonitor::kSlots; ++slot) otherAlone |= slot != s.slot && gSlotAlone[slot];
     const bool alone = displayMode == proto::kDisplayTabletOnly || displayMode == proto::kDisplayDevicesOnly;
     const bool restored = !alone && !otherAlone && restoreDisplays();
     gSlotAlone[s.slot] = alone;
     // « Tablette seule » : l'autre appareil rend la main et attend.
     if (displayMode == proto::kDisplayTabletOnly) {
         gExclusiveSlot = s.slot;
-        gStopSlot[1 - s.slot] = true;
-        // Son moniteur part tout de suite : retiré plus tard, Windows pourrait rallumer l'écran du PC.
-        if (gMonitor.raised(1 - s.slot)) {
-            gMonitor.release(1 - s.slot);
-            Sleep(800);
+        // Les autres appareils rendent la main. Leur moniteur part tout de suite : retiré plus
+        // tard, Windows pourrait rallumer l'écran du PC.
+        for (int slot = 0; slot < VirtualMonitor::kSlots; ++slot) {
+            if (slot == s.slot) continue;
+            gStopSlot[slot] = true;
+            if (gMonitor.raised(slot)) {
+                gMonitor.release(slot);
+                Sleep(800);
+            }
         }
     } else {
         int mine = s.slot;
@@ -768,6 +788,10 @@ bool runSession(const Options& opt, Session& s) {
     cfg.height = height;
     cfg.fps = std::min<uint32_t>(targetFps, tabletFps ? tabletFps : targetFps);
     cfg.bitrate = opt.bitrateMbps * 1'000'000;
+    // Télévision : son port réseau est limité à 100 Mb/s, et chaque image doit le traverser avant
+    // d'être décodée. À 30 Mb/s, une image transite en environ 5 ms contre 10 ms à 60 Mb/s, pour
+    // une qualité au niveau d'un Blu-ray en 1080p. La régulation peut encore baisser ce débit.
+    if (s.peer.link == Link::Tv) cfg.bitrate = std::min<uint32_t>(cfg.bitrate, 30'000'000);
     cfg.hevc = opt.hevc && (codecs & 2);
 
     const auto encoder = openEncoder(opt, output->vendorId, cap.device(), capTarget.Get(), cfg);
@@ -867,12 +891,13 @@ bool runSession(const Options& opt, Session& s) {
     const RECT capturedRect = output->desktop;
     uint32_t currentBitrate = cfg.bitrate;
     int calmSeconds = 0;
+    int tvHold = 0;
     const uint64_t startUs = nowUs();
     bool forceIdr = true, pending = false;
     uint64_t pendingPts = 0;
     int refinements = 0;
     bool keepRunning = true;
-    std::wstring linkName = std::wstring(L"Appareil ") + std::to_wstring(s.device + 1) + (s.peer.link == Link::Usb ? L" : USB" : L" : Wi-Fi");
+    std::wstring linkName = std::wstring(L"Appareil ") + std::to_wstring(s.device + 1) + (s.peer.link == Link::Usb ? L" : USB" : s.peer.link == Link::Tv ? L" : télévision" : L" : Wi-Fi");
     AudioStreamer audio;
     bool audioRunning = false, audioStateSent = false;
     int audioTargetSent = -2;
@@ -1020,7 +1045,10 @@ bool runSession(const Options& opt, Session& s) {
 
         const uint64_t now = nowUs();
         // Écran immobile : quelques images de plus affinent le texte après un mouvement.
-        const bool refine = !pending && refinements > 0 && now - lastEncode > 100'000;
+        // La télévision garde en réserve les dernières images reçues et compte le temps en images :
+        // pour elle, le flux ne s'arrête jamais, une image à chaque échéance, même écran immobile.
+        const bool keepTvFed = s.peer.link == Link::Tv && now >= nextEncodeUs;
+        const bool refine = !pending && ((refinements > 0 && now - lastEncode > 100'000) || keepTvFed);
         // Échéancier et non délai depuis la dernière image : une image un peu en avance
         // passe sans attendre, sinon la suivante l'écraserait et la cadence chuterait.
         const bool due = now >= nextEncodeUs;
@@ -1031,7 +1059,7 @@ bool runSession(const Options& opt, Session& s) {
             const bool idr = forceIdr;
             forceIdr = false;
             const uint64_t pts = pending ? pendingPts : now;
-            if (!pending && refine) --refinements;
+            if (!pending && refine && refinements > 0) --refinements;
             pending = false;
             lastEncode = now;
             nextEncodeUs = std::max(nextEncodeUs + intervalUs, now - intervalUs);
@@ -1070,7 +1098,7 @@ bool runSession(const Options& opt, Session& s) {
             // En mode icône, une ligne sur dix : le journal d'une longue session reste lisible.
             if (!opt.tray || windowCount++ % 10 == 0) {
                 logLine("[%s] capture %5.1f fps  envoi %5.1f fps  %6.1f Mb/s  encodage %5.1f ms  socket %5.1f ms  latence moy %5.1f ms  p95 %5.1f ms  décodage %5.1f ms  pertes %u\n",
-                            s.peer.link == Link::Usb ? "USB" : "WiFi", static_cast<double>(windowCaptured) / secs,
+                            s.peer.link == Link::Usb ? "USB" : s.peer.link == Link::Tv ? "TV" : "WiFi", static_cast<double>(windowCaptured) / secs,
                             static_cast<double>(windowFrames) / secs, mbps, encMs, sendMs, stats.tabletAvgLat / 1000.0,
                             stats.tabletP95Lat / 1000.0, stats.tabletAvgDec / 1000.0, stats.tabletDrops.load());
                 std::fflush(stdout);
@@ -1081,11 +1109,25 @@ bool runSession(const Options& opt, Session& s) {
             const bool simulated = opt.simulateCongestion && elapsedSec >= 5 && elapsedSec < 10;
             // Les premières secondes, le décodeur démarre : son P95 n'indique pas une saturation.
             const bool warmingUp = elapsedSec < 3;
-            const bool congested = simulated || sendMs > frameMs / 2 || (!warmingUp && stats.tabletP95Lat > kCongestedLatUs);
+            // Télévision : son lecteur à faible latence n'a pas de tampon, sa latence mesure donc la
+            // saturation de son décodeur. Après une baisse, on attend 3 s d'en voir l'effet.
+            const bool tv = s.peer.link == Link::Tv;
+            if (tvHold > 0) --tvHold;
+            const bool tvCongested = tv && !warmingUp && tvHold == 0 && stats.tabletP95Lat > kTvCongestedLatUs;
+            const bool congested = simulated || sendMs > frameMs / 2 || tvCongested ||
+                                   (!warmingUp && !tv && stats.tabletP95Lat > kCongestedLatUs);
             uint32_t nextBitrate = currentBitrate;
             if (congested) {
                 nextBitrate = std::max(kMinBitrate, currentBitrate / 4 * 3);
                 calmSeconds = 0;
+                if (tv) tvHold = 3;
+            } else if (tv) {
+                // Remontée lente : la saturation du téléviseur s'installe en dizaines de secondes.
+                if (stats.tabletP95Lat < kTvCalmLatUs) ++calmSeconds; else calmSeconds = 0;
+                if (currentBitrate < cfg.bitrate && calmSeconds >= 5) {
+                    nextBitrate = std::min(cfg.bitrate, currentBitrate / 10 * 11);
+                    calmSeconds = 0;
+                }
             } else if (currentBitrate < cfg.bitrate && ++calmSeconds >= 2) {
                 // File d'envoi vide : on remonte franchement, sinon prudemment.
                 const bool idle = sendMs < frameMs / 8;
@@ -1124,7 +1166,7 @@ bool runSession(const Options& opt, Session& s) {
     if (encoded > 0) {
         const double secs = static_cast<double>(nowUs() - startUs) / 1e6;
         logLine("RESUME lien=%s images=%llu duree=%.1fs debit=%.1fMb/s encodage_envoi=%.2fms touch=%llu clavier=%llu stylet=%llu\n",
-                    s.peer.link == Link::Usb ? "usb" : "wifi", static_cast<unsigned long long>(encoded), secs,
+                    s.peer.link == Link::Usb ? "usb" : s.peer.link == Link::Tv ? "tv" : "wifi", static_cast<unsigned long long>(encoded), secs,
                     static_cast<double>(bytesSent) * 8 / 1e6 / secs, static_cast<double>(encodeUsSum) / static_cast<double>(encoded) / 1000,
                     static_cast<unsigned long long>(touch.received()), static_cast<unsigned long long>(keys.received()),
                     static_cast<unsigned long long>(pen.received()));
@@ -1188,7 +1230,8 @@ std::vector<Peer> findPeers(const Options& opt, std::map<std::string, uint16_t>&
             addresses = discoverDevices(1500);
             for (int d = 0; d < kMaxDevices; ++d) {
                 const std::string known = loadDeviceAddress(d);
-                if (!known.empty() && loadPsk(d)) addresses.push_back(known);
+                // Une télévision ne s'atteint pas ainsi : c'est elle qui se connecte au PC.
+                if (!known.empty() && loadPsk(d) && loadDeviceSerial(d).rfind("tv-", 0) != 0) addresses.push_back(known);
             }
         }
         for (const auto& address : addresses) {
@@ -1258,7 +1301,11 @@ std::pair<std::unique_ptr<SecureChannel>, int> identify(const Peer& peer, const 
         auto psk = loadPsk(d);
         auto ch = std::make_unique<SecureChannel>();
         if (!ch->connectTo(peer.host, peer.port, 3000)) {
-            logLine("Connexion à %s : %s\n", peer.link == Link::Usb ? peer.serial.c_str() : peer.host.c_str(), ch->lastError().c_str());
+            // Un appareil éteint ou application fermée : noté une fois, pas à chaque tour.
+            static std::map<std::string, bool> reported;
+            const std::string who = peer.link == Link::Usb ? peer.serial : peer.host;
+            if (!reported[who]) logLine("Connexion à %s : %s\n", who.c_str(), ch->lastError().c_str());
+            reported[who] = true;
             return {};
         }
         if (psk && ch->handshake(*psk)) {
@@ -1308,6 +1355,128 @@ std::pair<std::unique_ptr<SecureChannel>, int> identify(const Peer& peer, const 
     return {};
 }
 
+// Télévisions : une application web ne peut pas attendre de connexion, c'est donc elle qui se
+// connecte au PC, en WebSocket. Chaque connexion acceptée attend ici que la boucle principale
+// l'authentifie.
+struct Incoming {
+    std::unique_ptr<SecureChannel> channel;
+    std::string address;
+    std::string keyId; // identifiant de la clé de la télévision, vide avant le premier appairage
+};
+std::mutex gIncomingMutex;
+std::vector<Incoming> gIncoming;
+
+// Identifiant public d'une clé : la télévision l'annonce pour que le PC choisisse la bonne clé
+// sans en essayer plusieurs. Il ne permet pas de retrouver la clé.
+std::string keyIdOf(const Key256& psk) {
+    const Key256 h = hmacSha256(psk, "id", 2);
+    static const char hex[] = "0123456789abcdef";
+    std::string id;
+    for (int i = 0; i < 8; ++i) {
+        id += hex[h[i] >> 4];
+        id += hex[h[i] & 15];
+    }
+    return id;
+}
+
+void handleTvConnection(SOCKET client, const std::string& address) {
+    DWORD timeout = 3000;
+    setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<char*>(&timeout), sizeof(timeout));
+    std::string request;
+    char buf[1024];
+    while (request.find("\r\n\r\n") == std::string::npos && request.size() < 4096) {
+        const int got = recv(client, buf, sizeof(buf), 0);
+        if (got <= 0) break;
+        request.append(buf, static_cast<size_t>(got));
+    }
+    const auto lineEnd = request.find("\r\n");
+    const std::string line = request.substr(0, lineEnd);
+    const auto header = [&](const std::string& name) {
+        std::string lower = request;
+        std::transform(lower.begin(), lower.end(), lower.begin(), [](char c) { return static_cast<char>(std::tolower(static_cast<unsigned char>(c))); });
+        const auto at = lower.find("\r\n" + name + ":");
+        if (at == std::string::npos) return std::string();
+        const auto start = request.find_first_not_of(' ', at + name.size() + 3);
+        return request.substr(start, request.find("\r\n", start) - start);
+    };
+    // Recherche du PC par la télévision : une réponse brève, sans rien révéler d'autre.
+    if (line.rfind("GET /36screenlink/ping ", 0) == 0) {
+        static const char reply[] = "HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\nContent-Type: text/plain\r\nContent-Length: 12\r\nConnection: close\r\n\r\n36Screenlink";
+        send(client, reply, static_cast<int>(sizeof(reply) - 1), 0);
+        closesocket(client);
+        return;
+    }
+    const std::string key = header("sec-websocket-key");
+    if (line.rfind("GET /36screenlink/ws", 0) != 0 || key.empty() || key.size() > 64) {
+        closesocket(client);
+        return;
+    }
+    std::string keyId;
+    const auto idAt = line.find("id=");
+    if (idAt != std::string::npos) {
+        for (size_t i = idAt + 3; i < line.size() && keyId.size() < 32 && std::isalnum(static_cast<unsigned char>(line[i])); ++i) keyId += line[i];
+    }
+    auto channel = std::make_unique<SecureChannel>();
+    if (!channel->adoptWebSocket(client, key)) return;
+    std::lock_guard lock(gIncomingMutex);
+    if (gIncoming.size() >= 4) return;
+    gIncoming.push_back({std::move(channel), address, keyId});
+}
+
+// La télévision se connecte au PC (une page web ne peut pas écouter) : le pare-feu doit laisser
+// entrer le port de la télévision. Règle posée au démarrage, sur les réseaux privés et de domaine
+// seulement, jamais public : le flux ne concerne que le réseau local de l'utilisateur.
+void ensureTvFirewallRule() {
+    wchar_t sys[MAX_PATH];
+    if (!GetSystemDirectoryW(sys, MAX_PATH)) return;
+    const std::wstring netsh = std::wstring(sys) + L"\\netsh.exe";
+    const std::wstring name = L"36Screenlink (télévision)";
+    auto run = [&](const std::wstring& args) {
+        std::wstring cmd = L"\"" + netsh + L"\" " + args;
+        STARTUPINFOW si{};
+        si.cb = sizeof(si);
+        PROCESS_INFORMATION pi{};
+        if (CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
+            WaitForSingleObject(pi.hProcess, 8000);
+            CloseHandle(pi.hProcess);
+            CloseHandle(pi.hThread);
+        }
+    };
+    // Idempotent : on retire l'éventuelle règle existante (même nom), puis on pose la bonne.
+    run(L"advfirewall firewall delete rule name=\"" + name + L"\"");
+    run(L"advfirewall firewall add rule name=\"" + name + L"\" dir=in action=allow protocol=TCP localport=" +
+        std::to_wstring(proto::kTvPort) + L" profile=private,domain");
+}
+
+void tvListener() {
+    ensureTvFirewallRule();
+    SOCKET server = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(proto::kTvPort);
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    if (server == INVALID_SOCKET || bind(server, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0 || listen(server, 4) != 0) {
+        logLine("Télévisions : port %u indisponible\n", proto::kTvPort);
+        if (server != INVALID_SOCKET) closesocket(server);
+        return;
+    }
+    while (!gStop) {
+        fd_set ready;
+        FD_ZERO(&ready);
+        FD_SET(server, &ready);
+        timeval tv{0, 500000};
+        if (select(0, &ready, nullptr, nullptr, &tv) <= 0) continue;
+        sockaddr_in from{};
+        int fromLen = sizeof(from);
+        SOCKET client = accept(server, reinterpret_cast<sockaddr*>(&from), &fromLen);
+        if (client == INVALID_SOCKET) continue;
+        char text[INET_ADDRSTRLEN] = {};
+        inet_ntop(AF_INET, &from.sin_addr, text, sizeof(text));
+        handleTvConnection(client, text);
+    }
+    closesocket(server);
+}
+
 void serviceLoop(Options opt) {
     std::vector<std::unique_ptr<Session>> sessions;
     std::map<std::string, uint16_t> usbPorts;
@@ -1316,6 +1485,31 @@ void serviceLoop(Options opt) {
     int lastSlot[kMaxDevices];
     std::fill(std::begin(lastSlot), std::end(lastSlot), -1);
     bool stopAll = false;
+    std::thread televisions(tvListener);
+
+    const auto slotUsedBy = [&](int slot) {
+        return std::any_of(sessions.begin(), sessions.end(), [slot](const auto& s) { return s->slot == slot; });
+    };
+    const auto startSession = [&](std::unique_ptr<SecureChannel> channel, int device, const Peer& peer) {
+        auto session = std::make_unique<Session>();
+        session->device = device;
+        session->peer = peer;
+        session->channel = std::move(channel);
+        // Le même moniteur qu'à la dernière session : Windows a gardé sa place.
+        int slot = lastSlot[device];
+        if (slot < 0 || slotUsedBy(slot)) {
+            for (slot = 0; slot < VirtualMonitor::kSlots && slotUsedBy(slot); ++slot) {}
+        }
+        session->slot = lastSlot[device] = slot;
+        Session* raw = session.get();
+        raw->thread = std::thread([&opt, raw] {
+            tSlot = raw->slot;
+            tLogTag = "[Appareil " + std::to_string(raw->device + 1) + "] ";
+            raw->stopAll = !runSession(opt, *raw);
+            raw->finished = true;
+        });
+        sessions.push_back(std::move(session));
+    };
 
     while (!gStop && !stopAll) {
         const auto now = std::chrono::steady_clock::now();
@@ -1363,30 +1557,51 @@ void serviceLoop(Options opt) {
                     channel->shutdown();
                     continue;
                 }
-                auto session = std::make_unique<Session>();
-                session->device = device;
-                session->peer = peer;
-                session->channel = std::move(channel);
-                // Le même moniteur qu'à la dernière session : Windows a gardé sa place.
-                int slot = lastSlot[device];
-                if (slot < 0 || slotUsed(slot)) {
-                    for (slot = 0; slot < VirtualMonitor::kSlots && slotUsed(slot); ++slot) {}
+                startSession(std::move(channel), device, peer);
+            }
+        }
+        // Télévisions connectées au PC depuis le dernier tour.
+        std::vector<Incoming> incoming;
+        {
+            std::lock_guard lock(gIncomingMutex);
+            incoming.swap(gIncoming);
+        }
+        for (auto& in : incoming) {
+            Peer peer;
+            peer.link = Link::Tv;
+            peer.host = peer.wifiAddress = in.address;
+            peer.serial = "tv-" + in.address;
+            if (sessions.size() >= VirtualMonitor::kSlots || gExclusiveSlot >= 0 || peerInSession(peer, sessions)) {
+                in.channel->shutdown();
+                continue;
+            }
+            int device = -1;
+            std::optional<Key256> psk;
+            for (int d = 0; d < kMaxDevices && device < 0 && !in.keyId.empty(); ++d) {
+                psk = loadPsk(d);
+                if (psk && keyIdOf(*psk) == in.keyId) device = d;
+            }
+            if (device >= 0 && deviceInSession(device, sessions)) {
+                in.channel->shutdown();
+            } else if (device >= 0) {
+                if (!in.channel->handshake(*psk)) {
+                    logLine("Télévision %s : %s\n", in.address.c_str(), in.channel->lastError().c_str());
+                    continue;
                 }
-                session->slot = lastSlot[device] = slot;
-                Session* raw = session.get();
-                raw->thread = std::thread([&opt, raw] {
-                    tSlot = raw->slot;
-                    tLogTag = "[Appareil " + std::to_string(raw->device + 1) + "] ";
-                    raw->stopAll = !runSession(opt, *raw);
-                    raw->finished = true;
-                });
-                sessions.push_back(std::move(session));
+                saveDeviceAddress(device, in.address);
+                saveDeviceSerial(device, peer.serial);
+                startSession(std::move(in.channel), device, peer);
+            } else {
+                // Télévision inconnue : premier appairage, le code s'affiche sur le PC et sur la TV.
+                const int slotForKey = pairingSlotFor(peer, sessions);
+                if (slotForKey >= 0) tryPairing(*in.channel, slotForKey, peer);
             }
         }
         for (int i = 0; i < 10 && !gStop; ++i) Sleep(100);
     }
     gStop = true;
     for (auto& s : sessions) s->thread.join();
+    televisions.join();
 }
 
 Options parseArgs(int argc, wchar_t** argv) {

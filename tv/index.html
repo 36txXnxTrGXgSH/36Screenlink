@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1920, height=1080">
+<title>36Screenlink</title>
+<style>
+  html, body { margin: 0; padding: 0; width: 1920px; height: 1080px; background: #000; overflow: hidden; font-family: sans-serif; }
+  #video-element { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; background: #000; }
+  #cursor { position: absolute; left: 0; top: 0; pointer-events: none; display: none; image-rendering: pixelated; }
+  #panel { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; display: flex; flex-direction: column;
+           align-items: center; justify-content: center; color: #fff; text-align: center; background: #000; }
+  #status { font-size: 52px; font-weight: 600; }
+  #code { font-size: 120px; font-weight: 700; letter-spacing: 12px; color: #00E5FF; margin: 30px 0; display: none; }
+  #hint { font-size: 30px; color: #aaa; max-width: 1200px; margin-top: 20px; }
+  #stats { position: absolute; right: 24px; top: 24px; color: #00E5FF; background: rgba(0,0,0,.6);
+           font-size: 26px; padding: 8px 16px; border-radius: 8px; display: none; }
+</style>
+</head>
+<body>
+  <video id="video-element" autoplay></video>
+  <canvas id="cursor" width="32" height="32"></canvas>
+  <div id="panel">
+    <div id="status">Chargement…</div>
+    <div id="code"></div>
+    <div id="hint"></div>
+  </div>
+  <div id="stats"></div>
+
+  <script src="js/bytes.js"></script>
+  <script src="js/secure.js"></script>
+  <script type="text/javascript">
+    // Chargeur du module WebAssembly (non modularisé : il utilise la variable globale Module).
+    var Module = {
+      locateFile: function (path) { return 'wasm/' + path; },
+      print: function (text) { try { console.log(text); if (window.__tvLog) window.__tvLog(text); } catch (e) {} },
+      printErr: function (text) { try { console.log(text); if (window.__tvLog) window.__tvLog(text); } catch (e) {} },
+      onRuntimeInitialized: function () {
+        console.log('moteur WASM prêt');
+        var s = document.createElement('script');
+        s.src = 'js/app.js';
+        document.body.appendChild(s);
+      },
+      onAbort: function (what) { console.log('WASM abandon : ' + what); }
+    };
+  </script>
+  <script src="wasm/player.js"></script>
+  <script src="$WEBAPIS/webapis/webapis.js"></script>
+</body>
+</html>

@@ -1,7 +1,10 @@
 #include "channel.h"
 
 #include <ws2tcpip.h>
+#include <bcrypt.h>
+#include <wincrypt.h>
 
+#include <algorithm>
 #include <cstring>
 
 #include "protocol.h"
@@ -12,6 +15,18 @@ Key256 derive(const Key256& psk, const char* label, const std::vector<uint8_t>& 
     std::vector<uint8_t> msg(label, label + std::strlen(label));
     msg.insert(msg.end(), context.begin(), context.end());
     return hmacSha256(psk, msg.data(), msg.size());
+}
+
+// Réponse de poignée de main WebSocket : base64(SHA-1(clé + GUID)), RFC 6455.
+std::string webSocketAccept(const std::string& key) {
+    const std::string text = key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+    uint8_t digest[20] = {};
+    if (BCryptHash(BCRYPT_SHA1_ALG_HANDLE, nullptr, 0, reinterpret_cast<PUCHAR>(const_cast<char*>(text.data())),
+                   static_cast<ULONG>(text.size()), digest, sizeof(digest)) != 0) return {};
+    char out[64] = {};
+    DWORD n = sizeof(out);
+    if (!CryptBinaryToStringA(digest, sizeof(digest), CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, out, &n)) return {};
+    return std::string(out, n);
 }
 
 } // namespace
@@ -64,7 +79,106 @@ bool SecureChannel::connectTo(const std::string& host, uint16_t port, int timeou
     return true;
 }
 
+bool SecureChannel::adoptWebSocket(SOCKET socket, const std::string& webSocketKey) {
+    sock_ = socket;
+    const std::string accept = webSocketAccept(webSocketKey);
+    if (accept.empty()) {
+        error_ = "poignée de main WebSocket";
+        return false;
+    }
+    const std::string reply = "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: " +
+                              accept + "\r\n\r\n";
+    BOOL noDelay = TRUE;
+    int sendBuf = 192 * 1024;
+    DWORD recvTimeout = 5000;
+    setsockopt(sock_, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<char*>(&noDelay), sizeof(noDelay));
+    setsockopt(sock_, SOL_SOCKET, SO_SNDBUF, reinterpret_cast<char*>(&sendBuf), sizeof(sendBuf));
+    setsockopt(sock_, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<char*>(&recvTimeout), sizeof(recvTimeout));
+    if (!writeRaw(reply.data(), reply.size())) return false;
+    webSocket_ = true;
+    return true;
+}
+
+// En WebSocket, chaque écriture part dans un message binaire ; la lecture recolle les messages
+// en un flux continu, comme le TCP direct de la tablette.
 bool SecureChannel::writeAll(const void* p, size_t n) {
+    if (!webSocket_) return writeRaw(p, n);
+    uint8_t head[10];
+    size_t h = 0;
+    head[h++] = 0x82; // fin, binaire
+    if (n < 126) {
+        head[h++] = static_cast<uint8_t>(n);
+    } else if (n < 65536) {
+        head[h++] = 126;
+        head[h++] = static_cast<uint8_t>(n >> 8);
+        head[h++] = static_cast<uint8_t>(n);
+    } else {
+        head[h++] = 127;
+        for (int i = 7; i >= 0; --i) head[h++] = static_cast<uint8_t>(static_cast<uint64_t>(n) >> (i * 8));
+    }
+    return writeRaw(head, h) && writeRaw(p, n);
+}
+
+bool SecureChannel::readAll(void* p, size_t n) {
+    if (!webSocket_) return readRaw(p, n);
+    auto b = static_cast<uint8_t*>(p);
+    while (n > 0) {
+        if (wsPos_ >= wsIn_.size() && !readFrame()) return false;
+        const size_t take = std::min(n, wsIn_.size() - wsPos_);
+        std::memcpy(b, wsIn_.data() + wsPos_, take);
+        wsPos_ += take;
+        b += take;
+        n -= take;
+    }
+    return true;
+}
+
+// Un message WebSocket du client : masqué, au plus un enregistrement et son en-tête.
+bool SecureChannel::readFrame() {
+    for (;;) {
+        uint8_t head[2];
+        if (!readRaw(head, 2)) return false;
+        const int opcode = head[0] & 0x0F;
+        uint64_t len = head[1] & 0x7F;
+        if (len == 126 || len == 127) {
+            uint8_t ext[8];
+            const size_t extLen = len == 126 ? 2 : 8;
+            if (!readRaw(ext, extLen)) return false;
+            len = 0;
+            for (size_t i = 0; i < extLen; ++i) len = (len << 8) | ext[i];
+        }
+        if (len > proto::kMaxIncomingRecord + 64) {
+            error_ = "message WebSocket trop grand";
+            return false;
+        }
+        uint8_t mask[4] = {};
+        if ((head[1] & 0x80) && !readRaw(mask, 4)) return false;
+        std::vector<uint8_t> data(static_cast<size_t>(len));
+        if (len && !readRaw(data.data(), data.size())) return false;
+        for (size_t i = 0; i < data.size(); ++i) data[i] ^= mask[i % 4];
+        if (opcode == 0x8) {
+            error_ = "WebSocket fermé";
+            return false;
+        }
+        if (opcode == 0x9) {
+            // Ping : on répond pong avec le même contenu.
+            std::lock_guard lock(txMutex_);
+            const uint8_t pongHead[2] = {0x8A, static_cast<uint8_t>(data.size() & 0x7F)};
+            if (data.size() < 126 && writeRaw(pongHead, 2) && writeRaw(data.data(), data.size())) continue;
+            return false;
+        }
+        if (opcode == 0xA) continue;
+        if (opcode > 0x2) {
+            error_ = "message WebSocket inconnu";
+            return false;
+        }
+        wsIn_ = std::move(data);
+        wsPos_ = 0;
+        if (!wsIn_.empty()) return true;
+    }
+}
+
+bool SecureChannel::writeRaw(const void* p, size_t n) {
     auto b = static_cast<const char*>(p);
     while (n > 0) {
         const int sent = ::send(sock_, b, static_cast<int>(n), 0);
@@ -78,7 +192,7 @@ bool SecureChannel::writeAll(const void* p, size_t n) {
     return true;
 }
 
-bool SecureChannel::readAll(void* p, size_t n) {
+bool SecureChannel::readRaw(void* p, size_t n) {
     auto b = static_cast<char*>(p);
     while (n > 0) {
         const int got = recv(sock_, b, static_cast<int>(n), 0);
