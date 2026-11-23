@@ -15,6 +15,28 @@
   #hint { font-size: 30px; color: #aaa; max-width: 1200px; margin-top: 20px; }
   #stats { position: absolute; right: 24px; top: 24px; color: #00E5FF; background: rgba(0,0,0,.6);
            font-size: 26px; padding: 8px 16px; border-radius: 8px; display: none; }
+  /* Menu de la télécommande : panneau à gauche, comme le menu de la tablette. */
+  #menu { position: absolute; left: 0; top: 0; width: 640px; height: 1080px; display: none; z-index: 10;
+          background: rgba(18, 22, 28, .9); border-right: 2px solid rgba(0, 229, 255, .35); color: #fff; }
+  #menu h2 { margin: 0; padding: 44px 48px 20px; font-size: 40px; font-weight: 600; color: #00E5FF; }
+  #menu-list { height: 880px; overflow: hidden; padding: 0 24px; }
+  .menu-section { padding: 26px 24px 8px; font-size: 24px; letter-spacing: 2px; text-transform: uppercase; color: #8a97a6; }
+  .menu-row { padding: 14px 24px; font-size: 32px; border-radius: 12px; color: #e8eef4; }
+  .menu-row.sel { background: #00E5FF; color: #000; font-weight: 600; }
+  #menu-help { position: absolute; bottom: 26px; left: 48px; right: 24px; font-size: 22px; color: #8a97a6; }
+  /* Saisie d'un texte avec le clavier à l'écran du téléviseur. */
+  #kbd { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; display: none; z-index: 20;
+         flex-direction: column; align-items: center; justify-content: flex-start; padding-top: 160px;
+         box-sizing: border-box; background: rgba(0, 0, 0, .75); color: #fff; }
+  #kbd p { font-size: 34px; margin: 0 0 24px; }
+  #kbd-input { width: 1200px; font-size: 44px; padding: 18px 24px; border-radius: 12px; border: 3px solid #00E5FF;
+               background: #111; color: #fff; }
+  #kbd small { margin-top: 20px; font-size: 26px; color: #aaa; }
+  /* Messages brefs et écran protégé du PC. */
+  #toast { position: absolute; left: 50%; bottom: 60px; transform: translateX(-50%); max-width: 1600px; display: none; z-index: 30;
+           background: rgba(0, 0, 0, .82); color: #fff; font-size: 30px; padding: 16px 32px; border-radius: 14px; text-align: center; }
+  #secure { position: absolute; left: 50%; top: 40px; transform: translateX(-50%); display: none; z-index: 30;
+            background: rgba(120, 20, 20, .9); color: #fff; font-size: 28px; padding: 14px 28px; border-radius: 12px; }
 </style>
 </head>
 <body>
@@ -26,6 +48,18 @@
     <div id="hint"></div>
   </div>
   <div id="stats"></div>
+  <div id="menu">
+    <h2>36Screenlink</h2>
+    <div id="menu-list"></div>
+    <div id="menu-help">Haut / Bas : choisir · OK : valider · Retour : fermer</div>
+  </div>
+  <div id="kbd">
+    <p>Écrire un texte pour le PC</p>
+    <input id="kbd-input" type="text" autocomplete="off">
+    <small>Validez pour l'envoyer à l'endroit où écrit le PC · Retour : annuler</small>
+  </div>
+  <div id="toast"></div>
+  <div id="secure">Écran protégé du PC (UAC ou verrouillage) : la télécommande n'y agit pas</div>
 
   <script src="js/bytes.js"></script>
   <script src="js/secure.js"></script>

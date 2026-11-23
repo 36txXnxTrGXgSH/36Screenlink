@@ -149,14 +149,18 @@ class Player : public ElementaryMediaStreamSourceListener,
   }
 
   // Appelé par JavaScript pour chaque image, sur le fil principal. AppendPacketAsync y est autorisé.
-  void Push(size_t size, double pts, bool key) {
+  void Push(size_t size, double pts, double span, bool key) {
     if (!input || !track_valid_) return;
     const uint8_t* data = input;
     input = nullptr;  // une seule image par emplacement
     ElementaryMediaPacket pkt{};
     pkt.pts = Seconds{pts};
     pkt.dts = Seconds{pts};
-    pkt.duration = Seconds{1.0 * fps_den / fps_num};
+    // Durée choisie par JavaScript : assez longue pour recouvrir l'écart jusqu'à l'image suivante.
+    // Avec la durée nominale (1/60 s), chaque image irrégulière formait sa propre plage dans le
+    // tampon du lecteur, qui ne les fusionne ni ne les libère : après une heure, des milliers de
+    // plages, et un fil principal figé jusqu'à une seconde à chaque ajout.
+    pkt.duration = Seconds{span};
     pkt.is_key_frame = key;
     pkt.data_size = size;
     pkt.data = data;
@@ -214,8 +218,8 @@ EMSCRIPTEN_KEEPALIVE uint8_t* emss_buffer(int size) {
   return g_player.Buffer((size_t)size);
 }
 
-EMSCRIPTEN_KEEPALIVE void emss_push(int size, double pts, int key) {
-  g_player.Push((size_t)size, pts, key != 0);
+EMSCRIPTEN_KEEPALIVE void emss_push(int size, double pts, double span, int key) {
+  g_player.Push((size_t)size, pts, span, key != 0);
 }
 
 EMSCRIPTEN_KEEPALIVE int emss_state() { return g_player.State(); }

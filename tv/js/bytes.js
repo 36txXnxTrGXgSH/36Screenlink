@@ -73,6 +73,7 @@ Reader.prototype.take = function (n) { var v = this.b.subarray(this.p, this.p + 
 // Flux d'octets reconstitué à partir des messages WebSocket : lecture d'une taille exacte.
 function ByteStream() {
     this.chunks = [];
+    this.head = 0;   // premier morceau non lu : avancer un index coûte moins que décaler le tableau
     this.length = 0;
     this.waiting = null;
     this.closed = false;
@@ -95,14 +96,24 @@ ByteStream.prototype.wake = function () {
     w.resolve(this.consume(w.n));
 };
 ByteStream.prototype.consume = function (n) {
-    var out = new Uint8Array(n), at = 0;
-    while (at < n) {
-        var c = this.chunks[0], take = Math.min(c.length, n - at);
-        out.set(c.subarray(0, take), at);
-        at += take;
-        if (take === c.length) this.chunks.shift(); else this.chunks[0] = c.subarray(take);
+    var c = this.chunks[this.head], out;
+    if (c.length === n) {
+        // Cas courant : un message WebSocket contient exactement ce qui est demandé, sans recopie.
+        out = c;
+        this.chunks[this.head++] = null;
+    } else {
+        out = new Uint8Array(n);
+        var at = 0;
+        while (at < n) {
+            c = this.chunks[this.head];
+            var take = Math.min(c.length, n - at);
+            out.set(c.subarray(0, take), at);
+            at += take;
+            if (take === c.length) this.chunks[this.head++] = null; else this.chunks[this.head] = c.subarray(take);
+        }
     }
     this.length -= n;
+    if (this.head > 256 && this.head * 2 > this.chunks.length) { this.chunks = this.chunks.slice(this.head); this.head = 0; }
     return out;
 };
 ByteStream.prototype.read = function (n) {

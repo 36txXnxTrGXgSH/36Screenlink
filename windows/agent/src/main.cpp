@@ -479,7 +479,13 @@ void receiverLoop(Session& session, SecureChannel& ch, TouchInjector& touch, Key
     tLogTag = "[Appareil " + std::to_string(session.device + 1) + "] ";
     if (gSecureMode) attachInputDesktop();
     std::vector<uint8_t> msg;
-    int64_t bestRtt = INT64_MAX;
+    // Horloge : la meilleure mesure (aller-retour le plus court) de chaque fenêtre de 5 s est renvoyée
+    // à l'appareil. Les horloges du PC et de l'appareil dérivent l'une par rapport à l'autre : un
+    // recalage unique en début de session fausserait la latence mesurée de plusieurs centaines de
+    // millisecondes au bout d'une heure, et avec elle la régulation du débit.
+    int64_t bestRtt = INT64_MAX, windowOffset = 0;
+    uint64_t windowStart = 0;
+    bool clockSent = false;
     while (alive && ch.receive(msg)) {
         if (msg.empty()) continue;
         proto::Reader r(msg.data() + 1, msg.size() - 1);
@@ -495,13 +501,18 @@ void receiverLoop(Session& session, SecureChannel& ch, TouchInjector& touch, Key
             const uint64_t t0 = r.u64(), tablet = r.u64(), t1 = nowUs();
             const int64_t rtt = static_cast<int64_t>(t1 - t0);
             stats.lastPongUs = static_cast<int64_t>(t1);
-            // On ne garde que l'aller-retour le plus court : c'est l'estimation d'horloge la moins bruitée.
-            if (rtt <= bestRtt) {
+            // L'aller-retour le plus court de la fenêtre donne l'estimation d'horloge la moins bruitée.
+            if (rtt < bestRtt) {
                 bestRtt = rtt;
-                const int64_t offset = static_cast<int64_t>(tablet) - static_cast<int64_t>((t0 + t1) / 2);
+                windowOffset = static_cast<int64_t>(tablet) - static_cast<int64_t>((t0 + t1) / 2);
+            }
+            if (!clockSent || t1 - windowStart >= 5'000'000) {
                 proto::Writer w(proto::kClock);
-                w.u64(static_cast<uint64_t>(offset));
+                w.u64(static_cast<uint64_t>(windowOffset));
                 ch.send(w.data());
+                clockSent = true;
+                windowStart = t1;
+                bestRtt = INT64_MAX;
             }
             break;
         }
@@ -898,6 +909,11 @@ bool runSession(const Options& opt, Session& s) {
     int refinements = 0;
     bool keepRunning = true;
     std::wstring linkName = std::wstring(L"Appareil ") + std::to_wstring(s.device + 1) + (s.peer.link == Link::Usb ? L" : USB" : s.peer.link == Link::Tv ? L" : télévision" : L" : Wi-Fi");
+    // Son vers la télévision : regroupé en paquets d'environ 40 ms. Elle déchiffre chaque message
+    // en JavaScript, et une centaine de petits paquets par seconde en plus des images la saturaient.
+    // Déclaré avant `audio`, dont le fil d'exécution s'en sert : il doit lui survivre.
+    std::vector<int16_t> audioBatch;
+    uint32_t audioBatchRate = 0;
     AudioStreamer audio;
     bool audioRunning = false, audioStateSent = false;
     int audioTargetSent = -2;
@@ -954,7 +970,18 @@ bool runSession(const Options& opt, Session& s) {
         if (audioWanted != audioRunning || !audioStateSent || audioTarget != audioTargetSent) {
             audioTargetSent = audioTarget;
             if (audioWanted && !audioRunning) {
+                audioBatch.clear();
+                audioBatchRate = 0;
                 audio.start([&](uint32_t rate, const int16_t* samples, size_t frames) {
+                    if (s.peer.link == Link::Tv) {
+                        if (rate != audioBatchRate) { audioBatch.clear(); audioBatchRate = rate; }
+                        audioBatch.insert(audioBatch.end(), samples, samples + frames * 2);
+                        if (audioBatch.size() / 2 < rate / 25) return true;   // pas encore 40 ms
+                        proto::Writer w(proto::kAudio);
+                        w.u32(rate).bytes(audioBatch.data(), audioBatch.size() * 2);
+                        audioBatch.clear();
+                        return ch.send(w.data());
+                    }
                     proto::Writer w(proto::kAudio);
                     w.u32(rate).bytes(samples, frames * 4);
                     return ch.send(w.data());

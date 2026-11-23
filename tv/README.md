@@ -35,6 +35,27 @@ réseau restent en JavaScript ; le module ne fait que décoder.
 | `build-tv.ps1` | Paquet `.wgt` non signé (pour signature par Apps2Samsung) |
 | `deploy-tv.ps1` | Signe, installe et lance l'application sur le téléviseur par `sdb` |
 
+## Télécommande
+
+Testé avec la Smart Remote Samsung 2020. Codes reçus : croix 37 à 40, OK 13, Retour 10009,
+Lecture/Pause 10252, Volume 447/448, Muet 449, Chaîne 427/428, appui sur Chaîne 458 (« Guide »).
+Le téléviseur laisse une application réserver 46 touches (`tizen.tvinputdevice.getSupportedKeys()`),
+mais ni Netflix, ni Prime Video, ni Rakuten, ni Accueil, ni micro, ni mode Ambiant, ni 123 : vérifié
+sur le téléviseur, `registerKey` les refuse sous tous les noms essayés, et leur appui n'envoie aucun
+événement à l'application (seulement une perte de focus, ou le passage en arrière-plan). Même les
+chiffres et couleurs du pavé affiché par la touche 123 n'arrivent pas jusqu'à elle.
+
+L'appui sur le bouton Chaîne (« Guide », 458) est donc la seule touche libre de la Smart Remote :
+il ouvre le menu pendant l'affichage du PC, et autorise un nouvel appairage le reste du temps.
+
+- Volume, chaînes et touches média ne sont réservés que pendant l'affichage du PC : hors session,
+  ils reviennent au téléviseur. Guide, rouge et Info restent réservés tant que l'application est ouverte.
+- La télécommande n'envoie qu'un appui et un relâchement, sans répétition : déplacement continu du
+  pointeur, molette et touches répétées sont gérés par `app.js`.
+- Le PC reçoit les messages existants du protocole : `kMouse` (position absolue 0..65535 sur l'écran
+  du téléviseur), `kKey` (touches virtuelles Windows), `kText` (saisie) et `kControl` (affichage).
+  L'agent les ignore sur l'UAC et l'écran de verrouillage, comme pour la tablette.
+
 ## Détails du lecteur WASM
 
 - Mode **faible latence** (`EmssLatencyMode::kLow`). L'ultra-faible latence n'existe pas sur les
@@ -50,7 +71,7 @@ réseau restent en JavaScript ; le module ne fait que décoder.
   Une image clé n'est demandée qu'au démarrage et quand le téléviseur refuse une image.
 - L'encodeur du PC est déjà réglé en faible latence sans image B, ce qu'exige le mode faible latence.
 
-Trois pièges, et leur parade :
+Quatre pièges, et leur parade :
 
 1. **`AppendPacketAsync` ne copie pas les octets.** La glue JavaScript du SDK transmet une *vue* sur la
    mémoire du module (`new Uint8Array(HEAPU8.buffer, ptr, taille)`), lue plus tard par le téléviseur.
@@ -64,6 +85,12 @@ Trois pièges, et leur parade :
    mais jamais plus de 35 ms devant `video.currentTime`, et jamais en arrière.
 3. **Les envois refusés ne remontent que comme promesses rejetées.** `app.js` les intercepte
    (`unhandledrejection`) et repart sur la prochaine image clé, au lieu de laisser l'erreur se propager.
+4. **Le lecteur ne fusionne pas les images qui ne se touchent pas.** Avec la durée nominale (1/60 s),
+   chaque image arrivée à un rythme irrégulier formait sa propre plage dans `video.buffered`, jamais
+   libérée : environ 6 000 plages après une heure, un fil principal figé jusqu'à une seconde à chaque
+   ajout, et une latence qui montait jusqu'à plusieurs secondes, même à 1 Mb/s. Parade : chaque image
+   est déclarée longue de 250 ms (`SPAN` dans `app.js`) ; elle recouvre l'écart jusqu'à la suivante
+   et le tampon reste une seule plage. Le journal du téléviseur affiche `plages` et `blocage`.
 
 Côté PC, la latence de la télévision redevient un signal de régulation : au-delà de 250 ms (P95),
 l'agent baisse le débit d'un quart et attend 3 s ; il remonte de 10 % après 5 s sous 180 ms. Mesuré

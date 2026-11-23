@@ -56,7 +56,19 @@ Un téléviseur Samsung sous Tizen 5.5 ou plus récent peut lui aussi afficher l
 
 - **Réseau local seulement :** le téléviseur ne contacte que le PC, sur le réseau local, en flux chiffré. Rien ne sort vers Internet, aucun compte, aucun serveur.
 - **Connexion :** ouvrez l'application sur le téléviseur ; elle cherche le PC sur le réseau et affiche un code à 6 chiffres. Comparez-le avec celui du PC, puis confirmez avec la touche **OK** de la télécommande.
-- **Télécommande :** OK confirme l'appairage · touche rouge pour un nouvel appairage · Info affiche les mesures · Retour quitte.
+- **Piloter le PC à la télécommande :**
+
+  | Touche | Mode souris (par défaut) | Mode touches |
+  |---|---|---|
+  | Croix | déplace le pointeur, de plus en plus vite si on la tient | flèches du clavier |
+  | OK | clic gauche ; maintenu : clic droit | Entrée |
+  | Chaîne + / − | défilement | page précédente / suivante |
+  | Retour | Échap | Échap |
+  | Lecture/Pause, Volume, Muet | lecture/pause et volume du PC | idem |
+
+- **Menu :** un appui sur le bouton Chaîne (ou la touche Menu d'une autre télécommande) ouvre le menu : choix du pilotage, affichage (étendu, dupliqué, télévision seule), menu Démarrer, afficher le bureau, changer de fenêtre, saisie d'un texte avec le clavier du téléviseur, mesures, quitter.
+- **Hors affichage du PC**, la télécommande retrouve son usage normal (volume et chaînes du téléviseur). Les touches Netflix, Prime Video, Rakuten et Accueil restent au téléviseur : le système les réserve. Sur l'UAC ou l'écran de verrouillage du PC, la télécommande n'agit pas.
+- **Appairage :** OK confirme le code. Pour appairer un autre PC, appuyez sur le bouton Chaîne quand l'écran du PC n'est pas affiché, ou choisissez *Autoriser un nouvel appairage* dans le menu. Les touches 123, micro et mode Ambiant ne sont pas utilisables : comme Netflix, Prime Video et Rakuten, le téléviseur les garde pour lui.
 - **Qualité et retard :** l'image est fluide et nette ; le retard d'environ 80 ms convient pour regarder, présenter ou suivre un tableau de bord, mais reste trop élevé pour un travail fin à la souris. Environ 70 ms viennent du lecteur vidéo du téléviseur lui-même ; pour aller plus bas, il faut un câble HDMI et le *Mode Jeu*.
 - **Réglage conseillé du téléviseur :** désactivez *Clarté de l'image* (Auto Motion Plus), *Contraste numérique* et *Amélioration du contraste* : ces traitements ajoutent du retard après l'affichage. En mode d'image *Dynamique* ou *Vif*, les couleurs paraissent criardes ; *Film* ou *Standard* donne un rendu fidèle.
 
