@@ -337,6 +337,30 @@ std::optional<DisplaySnapshot> queryDisplays() {
 
 // Garde les écrans des appareils (36Screenlink) et éteint ceux du PC. Avec deux appareils,
 // l'autre reste allumé : « seul » veut dire sans l'écran du PC.
+// Windows mémorise une duplication faite avec Win+P pour cette combinaison d'écrans : dès que le
+// moniteur virtuel apparaît, il le clone alors avec l'écran du PC, les deux passent à la même
+// résolution (un écran ultra-large se retrouve déformé), et « Étendu » ou « Tablette seule »
+// ne peuvent plus séparer ni éteindre l'écran du PC. On repasse donc en bureau étendu, ce que
+// Windows retient à son tour pour cette combinaison. Vrai si une duplication a été défaite.
+bool undoClone() {
+    UINT32 pathCount = 0, modeCount = 0;
+    if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &pathCount, &modeCount) != ERROR_SUCCESS) return false;
+    std::vector<DISPLAYCONFIG_PATH_INFO> paths(pathCount);
+    std::vector<DISPLAYCONFIG_MODE_INFO> modes(modeCount);
+    if (QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &pathCount, paths.data(), &modeCount, modes.data(), nullptr) != ERROR_SUCCESS) return false;
+    bool clone = false;
+    for (UINT32 i = 0; i < pathCount && !clone; ++i)
+        for (UINT32 j = i + 1; j < pathCount && !clone; ++j)
+            clone = paths[i].sourceInfo.id == paths[j].sourceInfo.id &&
+                    paths[i].sourceInfo.adapterId.LowPart == paths[j].sourceInfo.adapterId.LowPart &&
+                    paths[i].sourceInfo.adapterId.HighPart == paths[j].sourceInfo.adapterId.HighPart;
+    if (!clone) return false;
+    const LONG result = SetDisplayConfig(0, nullptr, 0, nullptr, SDC_APPLY | SDC_TOPOLOGY_EXTEND);
+    logLine("Écrans dupliqués par Windows : retour au bureau étendu (résultat %ld)\n", result);
+    Sleep(1500);
+    return result == ERROR_SUCCESS;
+}
+
 bool useOnlyDisplay(const std::wstring& device, bool keepOtherDevices) {
     auto current = queryDisplays();
     if (!current) return false;
@@ -472,6 +496,9 @@ struct SessionStats {
     bool secureDesktop = false;
     std::atomic<bool> armed{false};
     std::atomic<int64_t> lastPongUs{0};
+    // Zone de l'image dans le cadre envoyé (0..65535), quand des bandes noires l'entourent : la
+    // souris du téléviseur, en coordonnées du cadre, est ramenée à l'écran du PC.
+    std::atomic<uint32_t> boxX{0}, boxY{0}, boxW{65535}, boxH{65535};
 };
 
 void receiverLoop(Session& session, SecureChannel& ch, TouchInjector& touch, KeyInjector& keys, PenInjector& pen, MouseInjector& mouse, WindowFollower& follower, DeviceHelper& helper, SessionStats& stats, std::atomic<bool>& alive) {
@@ -588,6 +615,14 @@ void receiverLoop(Session& session, SecureChannel& ch, TouchInjector& touch, Key
             m.buttons = r.u8();
             m.x = r.u16();
             m.y = r.u16();
+            {
+                const auto unbox = [](uint32_t v, uint32_t at, uint32_t size) {
+                    const int64_t t = (static_cast<int64_t>(v) - at) * 65535 / std::max<uint32_t>(size, 1);
+                    return static_cast<uint16_t>(std::clamp<int64_t>(t, 0, 65535));
+                };
+                m.x = unbox(m.x, stats.boxX, stats.boxW);
+                m.y = unbox(m.y, stats.boxY, stats.boxH);
+            }
             m.wheelV = static_cast<int16_t>(r.u16());
             m.wheelH = static_cast<int16_t>(r.u16());
             mouse.apply(m);
@@ -743,11 +778,21 @@ bool runSession(const Options& opt, Session& s) {
         Sleep(800);
     } else {
         virtualName = gMonitor.raise(s.slot);
+        // Cloné par Windows, le moniteur virtuel partage le nom de l'écran du PC : après le
+        // retour au bureau étendu, il en a un à lui.
+        if (undoClone()) virtualName = gMonitor.raise(s.slot);
     }
     auto outputs = enumerateOutputs();
     const bool mirrorPrimary = secureDesktop || displayMode == proto::kDisplayDuplicate;
     const int wanted = mirrorPrimary ? primaryIndex(outputs) : opt.outputIndex;
     const OutputInfo* output = pickOutput(outputs, wanted, virtualName);
+    // Au retour de « Tablette seule », Windows rallume les écrans du PC pendant quelques
+    // secondes, durant lesquelles aucun n'est encore listé : on attend qu'ils reviennent.
+    for (int attempt = 0; !output && attempt < 40; ++attempt) {
+        Sleep(250);
+        outputs = enumerateOutputs();
+        output = pickOutput(outputs, mirrorPrimary ? primaryIndex(outputs) : opt.outputIndex, virtualName);
+    }
     if (!output) {
         logLine("Aucun écran à capturer.\n");
         return false;
@@ -791,7 +836,25 @@ bool runSession(const Options& opt, Session& s) {
     }
     logLine("Capture : %ux%u, rotation %u\n", cap.width(), cap.height(), cap.rotationDegrees());
 
-    const UINT width = cap.width() & ~1u, height = cap.height() & ~1u;
+    UINT width = cap.width() & ~1u, height = cap.height() & ~1u;
+    // Le téléviseur ne décode pas plus grand que son écran (1920x1080), et son lecteur étire
+    // toujours l'image sur tout l'écran. Hors 16:9 (ultra-large 3440x1440, 4K, 16:10), le GPU
+    // réduit donc l'image en gardant ses proportions, au centre d'un cadre 1920x1080 à bandes
+    // noires. Sans cela, le téléviseur refusait les images, ou les affichait déformées.
+    RECT box{0, 0, 0, 0};
+    if (s.peer.link == Link::Tv && (width != 1920 || height != 1080)) {
+        const double k = std::min(1920.0 / width, 1080.0 / height);
+        const LONG cw = static_cast<LONG>(width * k) & ~1, ch2 = static_cast<LONG>(height * k) & ~1;
+        box = {(1920 - cw) / 2, (1080 - ch2) / 2, (1920 - cw) / 2 + cw, (1080 - ch2) / 2 + ch2};
+        if (cap.setScaledSize(1920, 1080, box)) {
+            logLine("Image pour le téléviseur : %ux%u dans un cadre 1920x1080 (zone %ldx%ld)\n", width, height, cw, ch2);
+            width = 1920;
+            height = 1080;
+        } else {
+            box = {0, 0, 0, 0};
+            logLine("Réduction pour le téléviseur impossible sur ce GPU : %ux%u envoyé tel quel\n", width, height);
+        }
+    }
     ComPtr<ID3D11Texture2D> capTarget = makeTexture(cap.device(), width, height, D3D11_USAGE_DEFAULT, D3D11_BIND_RENDER_TARGET, 0);
 
     EncoderConfig cfg;
@@ -856,6 +919,12 @@ bool runSession(const Options& opt, Session& s) {
 
     trayClearAlert();
     SessionStats stats;
+    if (box.right > box.left) {
+        stats.boxX = static_cast<uint32_t>(box.left * 65535 / 1920);
+        stats.boxY = static_cast<uint32_t>(box.top * 65535 / 1080);
+        stats.boxW = static_cast<uint32_t>((box.right - box.left) * 65535 / 1920);
+        stats.boxH = static_cast<uint32_t>((box.bottom - box.top) * 65535 / 1080);
+    }
     stats.lastPongUs = static_cast<int64_t>(nowUs());
     stats.secureDesktop = secureDesktop;
     std::atomic<bool> alive{true};

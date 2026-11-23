@@ -73,7 +73,17 @@ class Player : public ElementaryMediaStreamSourceListener,
     return input;
   }
 
+  // Aussi appelée pour reconstruire un lecteur bloqué : la piste puis la source sont libérées
+  // avant d'en créer de nouvelles sur la même balise vidéo.
   void Setup() {
+    track_valid_ = false;
+    track_open_ = false;
+    input = nullptr;
+    session_id_ = 0;
+    pushed_logged_ = 0;
+    track_ = ElementaryMediaTrack{};
+    source_.reset();
+    media_element_.reset();
     media_element_.reset(new HTMLMediaElement("video-element"));
     media_element_->SetListener(this);
     source_.reset(new ElementaryMediaStreamSource(

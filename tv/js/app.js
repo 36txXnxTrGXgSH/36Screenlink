@@ -623,6 +623,17 @@
         var frames = this.appended; this.appended = 0;
         return { frames: frames, avg: avg, p95: p95, drops: this.drops };
     };
+    // Reconstruit le lecteur bloqué : la prochaine image clé recrée source et piste (player.cc).
+    WasmPlayer.prototype.rebuild = function () {
+        tvLog('lecteur bloqué : reconstruction');
+        this.stuck = 0;
+        wasmStarted = false;
+        lastSent = -1; firstSec = -1;
+        this.timeline = [];
+        this.waitingKey = true;
+        this.lastIdrRequest = 0;
+        this.askKey();
+    };
     // Une image perdue casse toutes celles qui en dépendent : on n'envoie plus rien jusqu'à la
     // prochaine image clé, demandée aussitôt. L'image reste figée un instant au lieu de se dégrader.
     WasmPlayer.prototype.recover = function (why) {
@@ -723,6 +734,7 @@
             control: function (id, v) { send(new Writer(MSG.CONTROL).u8(id).u8(v).bytes()); }
         };
         // Réglage à chaud de l'avance (mesures depuis le débogueur).
+        window.__rebuild = function () { player.rebuild(); };
         window.__setSpan = function (v) { SPAN = v; tvLog('duree image : ' + (v * 1000).toFixed(0) + ' ms'); };
         window.__setLead = function (v) { LEAD = v; tvLog('avance max : ' + (v * 1000).toFixed(0) + ' ms'); };
 
@@ -759,6 +771,11 @@
             var total = q ? q.totalVideoFrames : (video.webkitDecodedFrameCount || 0);
             lost = ', lecteur ' + (total - player.lastTotal) + ' img, perdues ' + (dropped - player.lastDropped);
             player.lastTotal = total; player.lastDropped = dropped;
+            // Lecteur bloqué (piste refusée après un changement de taille, par exemple) : des
+            // images arrivent mais aucune n'est décodée. Il ne s'en remet pas seul : on le reconstruit.
+            player.stuck = s.frames > 0 && total === player.lastTotalBefore ? (player.stuck || 0) + 1 : 0;
+            player.lastTotalBefore = total;
+            if (player.stuck >= 6) player.rebuild();
             // Indicateurs de dérive lente : images en attente dans le décodeur (envoyées moins
             // décodées), octets en attente sur le réseau, mémoire, dérive d'horloge PC / téléviseur.
             var heap = performance.memory ? (performance.memory.usedJSHeapSize / 1e6).toFixed(0) + ' Mo' : '?';

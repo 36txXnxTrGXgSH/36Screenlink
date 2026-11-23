@@ -74,7 +74,81 @@ bool Capturer::open(const OutputInfo& info) {
     // Les dimensions annoncées suivent le bureau pivoté, mais la texture reste celle de la
     // sortie. La capture garde donc ce sens et la tablette applique la rotation.
     if (rotation_ == 90 || rotation_ == 270) std::swap(width_, height_);
+    // Réouverture après un changement de mode : une réduction préparée pour l'ancienne taille
+    // ne vaut plus.
+    if (full_) {
+        D3D11_TEXTURE2D_DESC fd{};
+        full_->GetDesc(&fd);
+        if (fd.Width != width_ || fd.Height != height_) {
+            vout_.Reset(); vin_.Reset(); vproc_.Reset(); venum_.Reset(); full_.Reset();
+            voutTarget_ = nullptr;
+        }
+    }
     return true;
+}
+
+bool Capturer::setScaledSize(UINT w, UINT h, RECT content) {
+    if (!device_ || rotation_ != 0 || w == 0 || h == 0 || content.right <= content.left || content.bottom <= content.top) return false;
+    if (FAILED(device_.As(&vdev_)) || FAILED(context_.As(&vctx_))) return false;
+    D3D11_TEXTURE2D_DESC td{};
+    td.Width = width_;
+    td.Height = height_;
+    td.MipLevels = 1;
+    td.ArraySize = 1;
+    td.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    td.SampleDesc.Count = 1;
+    td.Usage = D3D11_USAGE_DEFAULT;
+    td.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+    if (FAILED(device_->CreateTexture2D(&td, nullptr, full_.ReleaseAndGetAddressOf()))) return false;
+
+    D3D11_VIDEO_PROCESSOR_CONTENT_DESC cd{};
+    cd.InputFrameFormat = D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE;
+    cd.InputWidth = width_;
+    cd.InputHeight = height_;
+    cd.OutputWidth = w;
+    cd.OutputHeight = h;
+    cd.InputFrameRate = {60, 1};
+    cd.OutputFrameRate = {60, 1};
+    cd.Usage = D3D11_VIDEO_USAGE_OPTIMAL_SPEED;
+    D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC ivd{};
+    ivd.ViewDimension = D3D11_VPIV_DIMENSION_TEXTURE2D;
+    if (FAILED(vdev_->CreateVideoProcessorEnumerator(&cd, venum_.ReleaseAndGetAddressOf())) ||
+        FAILED(vdev_->CreateVideoProcessor(venum_.Get(), 0, vproc_.ReleaseAndGetAddressOf())) ||
+        FAILED(vdev_->CreateVideoProcessorInputView(full_.Get(), venum_.Get(), &ivd, vin_.ReleaseAndGetAddressOf()))) {
+        vin_.Reset(); vproc_.Reset(); venum_.Reset(); full_.Reset();
+        return false;
+    }
+    // Bureau en RVB plein, sortie en RVB plein : aucune conversion, aucun traitement d'image.
+    D3D11_VIDEO_PROCESSOR_COLOR_SPACE cs{};
+    cs.RGB_Range = 0;
+    vctx_->VideoProcessorSetStreamColorSpace(vproc_.Get(), 0, &cs);
+    vctx_->VideoProcessorSetOutputColorSpace(vproc_.Get(), &cs);
+    vctx_->VideoProcessorSetStreamAutoProcessingMode(vproc_.Get(), 0, FALSE);
+    vctx_->VideoProcessorSetStreamFrameFormat(vproc_.Get(), 0, D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE);
+    const RECT src{0, 0, static_cast<LONG>(width_), static_cast<LONG>(height_)};
+    const RECT frame{0, 0, static_cast<LONG>(w), static_cast<LONG>(h)};
+    vctx_->VideoProcessorSetStreamSourceRect(vproc_.Get(), 0, TRUE, &src);
+    vctx_->VideoProcessorSetStreamDestRect(vproc_.Get(), 0, TRUE, &content);
+    vctx_->VideoProcessorSetOutputTargetRect(vproc_.Get(), TRUE, &frame);
+    D3D11_VIDEO_COLOR black{};
+    black.RGBA.A = 1.0f;
+    vctx_->VideoProcessorSetOutputBackgroundColor(vproc_.Get(), FALSE, &black);
+    content_ = content;
+    voutTarget_ = nullptr;
+    return true;
+}
+
+bool Capturer::blitScaled(ID3D11Texture2D* target) {
+    if (target != voutTarget_) {
+        D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC ovd{};
+        ovd.ViewDimension = D3D11_VPOV_DIMENSION_TEXTURE2D;
+        if (FAILED(vdev_->CreateVideoProcessorOutputView(target, venum_.Get(), &ovd, vout_.ReleaseAndGetAddressOf()))) return false;
+        voutTarget_ = target;
+    }
+    D3D11_VIDEO_PROCESSOR_STREAM stream{};
+    stream.Enable = TRUE;
+    stream.pInputSurface = vin_.Get();
+    return SUCCEEDED(vctx_->VideoProcessorBlt(vproc_.Get(), vout_.Get(), 0, 1, &stream));
 }
 
 void Capturer::readCursorShape(const DXGI_OUTDUPL_FRAME_INFO& info, CapturedFrame& frame) {
@@ -132,6 +206,10 @@ Capturer::Result Capturer::acquire(UINT timeoutMs, ID3D11Texture2D* target, Capt
         frame.cursorVisible = info.PointerPosition.Visible != FALSE;
         frame.cursorX = info.PointerPosition.Position.x;
         frame.cursorY = info.PointerPosition.Position.y;
+        if (vproc_) {
+            frame.cursorX = content_.left + static_cast<int>(static_cast<int64_t>(frame.cursorX) * (content_.right - content_.left) / width_);
+            frame.cursorY = content_.top + static_cast<int>(static_cast<int64_t>(frame.cursorY) * (content_.bottom - content_.top) / height_);
+        }
     }
     readCursorShape(info, frame);
 
@@ -140,8 +218,13 @@ Capturer::Result Capturer::acquire(UINT timeoutMs, ID3D11Texture2D* target, Capt
         if (SUCCEEDED(resource.As(&texture))) {
             // Région plutôt que CopyResource : la cible peut être plus petite d'un pixel,
             // l'encodeur exigeant des dimensions paires.
-            context_->CopySubresourceRegion(target, 0, 0, 0, 0, texture.Get(), 0, nullptr);
-            frame.imageUpdated = true;
+            if (vproc_) {
+                context_->CopySubresourceRegion(full_.Get(), 0, 0, 0, 0, texture.Get(), 0, nullptr);
+                frame.imageUpdated = blitScaled(target);
+            } else {
+                context_->CopySubresourceRegion(target, 0, 0, 0, 0, texture.Get(), 0, nullptr);
+                frame.imageUpdated = true;
+            }
             frame.presentQpc = static_cast<uint64_t>(info.LastPresentTime.QuadPart);
         }
     }

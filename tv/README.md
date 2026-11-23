@@ -100,6 +100,21 @@ Le débit est plafonné à 30 Mb/s : le port réseau du téléviseur est limité
 chaque image mettait environ 10 ms à le traverser (latence médiane 92 ms au lieu de 82), pour un
 gain visuel négligeable en 1080p.
 
+**Dupliquer** montre l'écran principal du PC dans sa résolution, sans la changer. Le téléviseur
+refuse toute image plus grande que 1920x1080, et son lecteur étire toujours l'image sur tout l'écran,
+sans respecter ses proportions. Pour un écran qui n'est pas en 1920x1080 (ultra-large 3440x1440, 4K,
+16:10), l'agent réduit donc l'image sur le GPU et la place au centre d'un cadre 1920x1080 à bandes
+noires (3440x1440 → zone de 1920x802), avant de l'encoder. La souris de la télécommande, envoyée en
+coordonnées du cadre, est ramenée à cette zone par l'agent. Évitez la duplication de Windows (Win+P) : elle impose
+la même résolution aux deux écrans, et un écran ultra-large passe alors en 1920x1080, déformé. Windows
+la mémorise en plus pour cette combinaison d'écrans, si bien qu'« Étendu » devenait une duplication et
+que « Télévision seule » laissait l'écran du PC allumé. L'agent détecte désormais ce clonage dès que
+l'écran du téléviseur apparaît et repasse en bureau étendu (`undoClone` dans `main.cpp`).
+
+Si le lecteur se bloque malgré tout (images reçues mais aucune décodée pendant 6 s, par exemple après
+un refus de piste), `app.js` le reconstruit sur place : nouvelle source et nouvelle piste sur la même
+balise vidéo, à partir de l'image clé suivante. L'image revient en moins d'une seconde.
+
 Budget mesuré : environ 16 ms de la capture au téléviseur (encodage, réseau ; le déchiffrement ne
 coûte que 1,2 ms), puis environ 65 ms dans le lecteur vidéo du téléviseur. Cette seconde part est
 fixe sur ce modèle : réduire l'avance des horodatages (de 35 ms à 0) ou déclarer dans le SPS l'absence
