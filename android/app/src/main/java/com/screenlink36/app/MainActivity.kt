@@ -262,7 +262,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamServer.Ui {
 
     private val menuActions = object : SideMenu.Actions {
         override fun onAudioChoice(choice: Int) {
-            val other = otherDevices.firstOrNull()
+            val other = otherDevices.getOrNull(choice - 2)
             when (choice) {
                 0 -> server?.requestAudioRoute(false)
                 1 -> server?.requestAudioRoute(true, selfDevice)
@@ -319,11 +319,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamServer.Ui {
 
     private fun refreshMenu() = menu.update(audioChoice(), displayMode, frameRate, orientationChoice, touchEnabled, autoKeyboard)
 
-    // 0 son sur le PC, 1 sur cet appareil, 2 sur l'autre appareil.
-    private fun audioChoice() = when {
-        audioOnTablet || (audioTarget != Protocol.NO_DEVICE && audioTarget == selfDevice) -> 1
-        audioTarget != Protocol.NO_DEVICE && otherDevices.any { it.first == audioTarget } -> 2
-        else -> 0
+    // 0 son sur le PC, 1 sur cet appareil, 2 et suivants sur l'un des autres appareils.
+    private fun audioChoice(): Int {
+        if (audioOnTablet || (audioTarget != Protocol.NO_DEVICE && audioTarget == selfDevice)) return 1
+        val other = if (audioTarget == Protocol.NO_DEVICE) -1 else otherDevices.indexOfFirst { it.first == audioTarget }
+        return if (other >= 0) 2 + other else 0
     }
 
     // Un téléphone sert d'écran posé à l'horizontale : paysage par défaut, même si la rotation
@@ -408,7 +408,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamServer.Ui {
     override fun onWaiting(message: String) = runOnUiThread {
         streamWidth = 0
         otherDevices = emptyList()
-        menu.setOtherDevice(null)
+        menu.setOtherDevices(emptyList())
         screens = emptyList()
         taskbar = null
         textFocus = null
@@ -456,9 +456,13 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamServer.Ui {
     override fun onDevices(self: Int, others: List<Pair<Int, Int>>) = runOnUiThread {
         selfDevice = self
         otherDevices = others
-        // Un seul autre appareil à la fois : le PC en gère deux.
-        val other = others.firstOrNull()
-        menu.setOtherDevice(other?.let { if (it.second == Protocol.KIND_PHONE) "Téléphone" else "Tablette" })
+        menu.setOtherDevices(others.map {
+            when (it.second) {
+                Protocol.KIND_PHONE -> "Téléphone"
+                Protocol.KIND_TV -> "Télévision"
+                else -> "Tablette"
+            }
+        })
         refreshMenu()
     }
 

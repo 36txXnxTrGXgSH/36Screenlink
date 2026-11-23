@@ -258,6 +258,9 @@
     // Le PC envoie du PCM stéréo 16 bits par petits morceaux ; on les enchaîne avec l'API audio du
     // navigateur. Pendant ce temps, le PC coupe son propre haut-parleur (et le rétablit ensuite).
     var audioOnTv = false;
+    // Appareil qui reçoit le son (0xFF : le PC), et autres appareils connectés : [{ id, kind }].
+    var audioTarget = 0xFF, selfDevice = 0xFF, otherDevices = [];
+    var KIND_NAMES = ['tablette', 'téléphone', 'télévision'];
     var sound = { ctx: null, next: 0 };
     function soundContext() {
         if (!sound.ctx) {
@@ -298,8 +301,17 @@
     function setAudioRoute(onTv) {
         if (!link) return;
         if (onTv) soundContext();   // créé pendant l'appui sur OK : le navigateur l'autorise à jouer
-        link.audioRoute(onTv);
+        link.audioRoute(onTv, 0xFF);
         toast(onTv ? 'Son : sur la télévision' : 'Son : sur le PC');
+    }
+    // Son vers un autre appareil connecté (tablette, téléphone).
+    function setAudioDevice(d) {
+        if (!link) return;
+        link.audioRoute(true, d.id);
+        toast('Son : sur ' + (d.kind === 1 ? 'le ' : 'la ') + KIND_NAMES[d.kind]);
+    }
+    function onAudioOther() {
+        return !audioOnTv && otherDevices.some(function (d) { return d.id === audioTarget; });
     }
 
     // ---------------------------------------------------------------- menu
@@ -328,9 +340,17 @@
         if (deviceCount > 1) rows.push({ label: 'Appareils seuls', check: displayMode === 3, act: function () { setDisplay(3); } });
         rows.push(
             { section: 'Son' },
-            { label: 'Sur le PC', check: !audioOnTv, act: function () { setAudioRoute(false); } },
+            { label: 'Sur le PC', check: !audioOnTv && !onAudioOther(), act: function () { setAudioRoute(false); } },
             { label: 'Sur la télévision', check: audioOnTv, act: function () { setAudioRoute(true); } }
         );
+        otherDevices.forEach(function (d) {
+            if (d.kind > 1) return;
+            var name = KIND_NAMES[d.kind];
+            var same = otherDevices.filter(function (o) { return o.kind === d.kind; });
+            if (same.length > 1) name += ' ' + (same.indexOf(d) + 1);
+            rows.push({ label: 'Sur ' + (d.kind === 1 ? 'le ' : 'la ') + name, check: !audioOnTv && audioTarget === d.id,
+                        act: function () { setAudioDevice(d); } });
+        });
         rows.push(
             { section: 'Raccourcis' },
             { label: 'Menu Démarrer', act: function () { tap(VK.LWIN); } },
@@ -730,7 +750,7 @@
                 send(new Writer(MSG.MOUSE).u8(buttons).u16(x).u16(y).u16(wheel & 0xFFFF).u16(0).bytes());
             },
             text: function (s) { send(Bytes.concat(new Uint8Array([MSG.TEXT]), encoder.encode(s))); },
-            audioRoute: function (onTv) { send(new Writer(MSG.AUDIO_ROUTE).u8(onTv ? 1 : 0).u8(0xFF).bytes()); },
+            audioRoute: function (on, target) { send(new Writer(MSG.AUDIO_ROUTE).u8(on ? 1 : 0).u8(target).bytes()); },
             control: function (id, v) { send(new Writer(MSG.CONTROL).u8(id).u8(v).bytes()); }
         };
         // Réglage à chaud de l'avance (mesures depuis le débogueur).
@@ -839,14 +859,21 @@
                     displayMode = r.u8();
                     break;
                 case MSG.DEVICES:
-                    r.u8();
+                    selfDevice = r.u8();
                     deviceCount = r.u8();
+                    otherDevices = [];
+                    for (var di = 0; di < deviceCount && di < 8; di++) {
+                        var dId = r.u8(), dKind = r.u8();
+                        if (dId !== selfDevice) otherDevices.push({ id: dId, kind: dKind });
+                    }
                     break;
                 case MSG.SECURE_STATE:
                     setSecure(r.u8() !== 0);
                     break;
                 case MSG.AUDIO_STATE:
-                    setAudioOnTv(r.u8() !== 0);
+                    var audioHere = r.u8() !== 0;
+                    audioTarget = r.remaining() > 0 ? r.u8() : (audioHere ? selfDevice : 0xFF);
+                    setAudioOnTv(audioHere);
                     break;
                 case MSG.VIDEO:
                     var flags = r.u8(), pts = r.u64();

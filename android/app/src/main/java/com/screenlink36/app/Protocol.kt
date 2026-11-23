@@ -46,6 +46,7 @@ object Protocol {
 
     const val KIND_TABLET = 0
     const val KIND_PHONE = 1
+    const val KIND_TV = 2
     /** Son sur le PC, ou aucun appareil désigné. */
     const val NO_DEVICE = 0xFF
 

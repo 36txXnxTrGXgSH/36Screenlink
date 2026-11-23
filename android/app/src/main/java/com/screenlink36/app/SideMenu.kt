@@ -84,9 +84,9 @@ class SideMenu(
     // Sortie son et affichage dépendent de l'autre appareil connecté : ces deux choix se reconstruisent.
     private val audioBox = FrameLayout(appContext)
     private val modeBox = FrameLayout(appContext)
-    private var audio = buildAudio(null)
-    private var mode = buildMode(null)
-    private var otherDevice: String? = null
+    private var audio = buildAudio(emptyList())
+    private var mode = buildMode(emptyList())
+    private var otherDevices: List<String> = emptyList()
     private val rate = Segments(frameRates.map { "$it Hz" to null }) {
         if (frameRates[it] != frameRate) actions.onFrameRate(frameRates[it])
     }
@@ -144,31 +144,35 @@ class SideMenu(
 
     private fun alone(name: String) = if (name == "Tablette") "Tablette seule" else "$name seul"
 
-    private fun buildAudio(other: String?): Segments {
-        // À trois choix, sans icônes : la place manque.
-        val choices = if (other == null) listOf("PC" to R.drawable.ms_computer, deviceName to R.drawable.ms_tablet_android)
-        else listOf("PC" to null, deviceName to null, other to null)
-        return Segments(choices) { if (it != audioChoice) actions.onAudioChoice(it) }
+    // Choix 0 : PC, 1 : cet appareil, 2 et suivants : les autres appareils connectés, dans l'ordre.
+    private fun buildAudio(others: List<String>): Segments {
+        // À plus de deux choix, sans icônes : la place manque. À quatre, sur deux lignes.
+        val choices = if (others.isEmpty()) listOf("PC" to R.drawable.ms_computer, deviceName to R.drawable.ms_tablet_android)
+        else listOf("PC" to null, deviceName to null) + others.map { it to null }
+        return Segments(choices, rows = if (choices.size > 3) 2 else 1) { if (it != audioChoice) actions.onAudioChoice(it) }
     }
 
-    private fun buildMode(other: String?): Segments {
+    private fun buildMode(others: List<String>): Segments {
         val choices = mutableListOf("Étendu" to null, "Dupliquer" to null, alone(deviceName) to null)
-        // Avec un autre appareil : les deux appareils, sans l'écran du PC.
-        if (other != null) choices += (if (other == deviceName) "Les deux ${deviceName.lowercase()}s" else "$deviceName et ${other.lowercase()}") to null
-        return Segments(choices, rows = if (other != null) 2 else 1) { actions.onDisplayMode(it) }
+        // Avec d'autres appareils : les appareils seuls, sans l'écran du PC.
+        val other = others.singleOrNull()
+        if (others.size > 1) choices += "Appareils seuls" to null
+        else if (other != null) choices += (if (other == deviceName) "Les deux ${deviceName.lowercase()}s" else "$deviceName et ${other.lowercase()}") to null
+        return Segments(choices, rows = if (others.isNotEmpty()) 2 else 1) { actions.onDisplayMode(it) }
     }
 
-    /** Autre appareil connecté au PC (« Tablette », « Téléphone »), ou null. */
-    fun setOtherDevice(other: String?) {
-        if (other == otherDevice) return
-        otherDevice = other
-        audio = buildAudio(other)
-        mode = buildMode(other)
+    /** Autres appareils connectés au PC (« Tablette », « Téléphone », « Télévision »). */
+    fun setOtherDevices(others: List<String>) {
+        if (others == otherDevices) return
+        otherDevices = others
+        audio = buildAudio(others)
+        mode = buildMode(others)
         audioBox.removeAllViews()
         audioBox.addView(audio.view, FrameLayout.LayoutParams(MATCH, MATCH))
+        audioBox.layoutParams = audioBox.layoutParams.apply { height = dp(if (others.size > 1) 76 else 40) }
         modeBox.removeAllViews()
         modeBox.addView(mode.view, FrameLayout.LayoutParams(MATCH, MATCH))
-        modeBox.layoutParams = modeBox.layoutParams.apply { height = dp(if (other != null) 76 else 40) }
+        modeBox.layoutParams = modeBox.layoutParams.apply { height = dp(if (others.isNotEmpty()) 76 else 40) }
         audio.select(audioChoice)
         mode.select(displayMode)
     }
