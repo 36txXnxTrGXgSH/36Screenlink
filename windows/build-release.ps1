@@ -1,6 +1,7 @@
-﻿# Construit tout ce qui se publie : dist\release\36Screenlink-Setup.exe et 36Screenlink.apk.
+﻿# Construit tout ce qui se publie : dist\release\36Screenlink-Setup.exe, 36Screenlink.apk,
+# 36Screenlink-Portable.zip et 36Screenlink-TV.wgt (téléviseur Samsung, non signé).
 # Aucune donnée locale ne peut y entrer : l'installateur ne prend que les fichiers qu'il liste.
-param([string]$Version = '1.8.0')
+param([string]$Version = '2.0.0')
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot
 $out = Join-Path $root 'dist\release'
@@ -52,4 +53,7 @@ $zip = Join-Path $out '36Screenlink-Portable.zip'
 Remove-Item $zip -ErrorAction SilentlyContinue
 Compress-Archive -Path $stage -DestinationPath $zip
 Remove-Item $stage -Recurse -Force
-Get-Item "$out\36Screenlink-Setup.exe", "$out\36Screenlink.apk", $zip | Select-Object Name, Length
+# Téléviseur Samsung : paquet non signé, liste blanche (voir tv\build-tv.ps1).
+& powershell -NoProfile -ExecutionPolicy Bypass -File "$root\tv\build-tv.ps1" -Out $out | Out-Null
+if ($LASTEXITCODE) { throw 'Paquet du téléviseur' }
+Get-Item "$out\36Screenlink-Setup.exe", "$out\36Screenlink.apk", $zip, "$out\36Screenlink-TV.wgt" | Select-Object Name, Length

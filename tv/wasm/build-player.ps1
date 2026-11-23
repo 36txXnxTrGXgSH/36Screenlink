@@ -26,4 +26,16 @@ Set-Location $PSScriptRoot
     -s "EXPORTED_FUNCTIONS=@exported.json" -s "EXTRA_EXPORTED_RUNTIME_METHODS=@runtime.json" `
     -o player.js
 if ($LASTEXITCODE) { throw 'Compilation du lecteur WebAssembly' }
+# Les bibliothèques Samsung gardent le chemin de leurs sources (messages d'assertion) : le dossier
+# local du SDK ne doit pas partir dans le paquet publié. Remplacement à longueur égale, pour ne
+# rien décaler dans la mémoire du module.
+$bytes = [IO.File]::ReadAllBytes((Join-Path $PSScriptRoot 'player.wasm'))
+$latin = [Text.Encoding]::GetEncoding(28591)
+$text = $latin.GetString($bytes)
+$sdkDir = (Resolve-Path $Emsdk).Path.TrimEnd('\')
+foreach ($prefix in @(($sdkDir + '\'), ($sdkDir.Replace('\', '/') + '/'))) {
+    $text = $text.Replace($prefix, 'emsdk/'.PadRight($prefix.Length, '_'))
+}
+[IO.File]::WriteAllBytes((Join-Path $PSScriptRoot 'player.wasm'), $latin.GetBytes($text))
+if ($text.Contains($sdkDir)) { throw 'Un chemin local reste dans player.wasm' }
 Write-Host "Lecteur compilé : player.js + player.wasm"

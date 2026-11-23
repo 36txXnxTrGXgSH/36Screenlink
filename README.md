@@ -11,6 +11,7 @@ Dans la page **Releases** du dépôt :
 1. Sur le PC, téléchargez et lancez `36Screenlink-Setup.exe`.
 2. Sur l'appareil Android, téléchargez et installez `36Screenlink.apk`, puis ouvrez l'application.
 3. Comparez le code à 6 chiffres affiché sur le PC et sur l'appareil. S'il est identique, confirmez des deux côtés.
+4. Pour un téléviseur Samsung : `36Screenlink-TV.wgt`, voir [Télévision Samsung](#télévision-samsung-tizen).
 
 C'est tout : l'écran étendu apparaît. Ensuite, 36Screenlink démarre avec Windows, et il suffit d'ouvrir l'application.
 
@@ -72,7 +73,10 @@ Un téléviseur Samsung sous Tizen 5.5 ou plus récent peut lui aussi afficher l
 - **Qualité et retard :** l'image est fluide et nette ; le retard d'environ 80 ms convient pour regarder, présenter ou suivre un tableau de bord, mais reste trop élevé pour un travail fin à la souris. Environ 70 ms viennent du lecteur vidéo du téléviseur lui-même ; pour aller plus bas, il faut un câble HDMI et le *Mode Jeu*.
 - **Réglage conseillé du téléviseur :** désactivez *Clarté de l'image* (Auto Motion Plus), *Contraste numérique* et *Amélioration du contraste* : ces traitements ajoutent du retard après l'affichage. En mode d'image *Dynamique* ou *Vif*, les couleurs paraissent criardes ; *Film* ou *Standard* donne un rendu fidèle.
 
-L'application téléviseur s'installe en **mode développeur** (elle n'est pas publiée sur le magasin Samsung) : voir le dossier [`tv/`](tv/) et son script `deploy-tv.ps1`. C'est une prise en charge avancée, testée sur un Samsung UE55TU8005 (2020, Tizen 5.5).
+- **Son :** le menu du téléviseur choisit où sort le son du PC, sur le PC ou sur le téléviseur.
+- **Dupliquer** garde l'écran du PC dans sa résolution ; un écran ultra-large ou 4K est réduit pour le téléviseur, avec des bandes noires, sans déformation. Préférez ce menu à la duplication de Windows (Win+P), qui impose la même résolution aux deux écrans.
+
+**Installation :** l'application n'est pas publiée sur le magasin Samsung, et le paquet `36Screenlink-TV.wgt` de la release n'est pas signé : un téléviseur n'accepte que les applications signées par un certificat Samsung lié à lui. Le plus simple est l'outil gratuit **Apps2Samsung**, qui crée ce certificat avec votre compte Samsung, signe le `.wgt` et l'installe : passez le téléviseur en mode développeur (dans Applications, tapez 1 2 3 4 5 à la télécommande), indiquez l'adresse IP du PC, redémarrez le téléviseur, puis ouvrez le `.wgt` dans Apps2Samsung. Avec le kit Tizen Studio, le script [`tv/deploy-tv.ps1`](tv/) fait la même chose. C'est une prise en charge avancée, testée sur un Samsung UE55TU8005 (2020, Tizen 5.5).
 
 ## Utilisation
 
@@ -141,7 +145,7 @@ Paramètres Windows > Applications > 36Screenlink > Désinstaller. Le pilote, le
 Prérequis : Visual Studio 2022 ou Build Tools avec C++, Windows SDK 10.0.26100, Android SDK, JDK 17 et Inno Setup 6. Une APK finale exige un `android/keystore.properties` à vous, jamais versionné, avec `storeFile`, `storePassword`, `keyAlias` et `keyPassword`.
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File windows/build-release.ps1 -Version 1.8.0
+powershell -ExecutionPolicy Bypass -File windows/build-release.ps1 -Version 2.0.0
 ```
 
 Le résultat se trouve dans `dist/release`.
