@@ -1,8 +1,9 @@
 # 36Screenlink — application téléviseur (Samsung Tizen)
 
 Affiche l'écran du PC sur un téléviseur Samsung sous Tizen 5.5 ou plus récent, à faible latence
-(environ 80 ms de bout en bout, 1080p à 60 images/s, débit plafonné à 30 Mb/s), sur le réseau local,
-en flux chiffré.
+(60 à 85 ms de la capture à l'image présentée, 1080p à 60 images/s, débit plafonné à 30 Mb/s), sur le
+réseau local, en flux chiffré. Testé sur un Samsung UE55TU8005 (gamme 2020, Tizen 5.5, navigateur
+Chromium 69.0.3497), avec un PC équipé d'une RTX 3080 ; mesures détaillées dans le README principal.
 
 Le téléviseur joue le rôle d'un troisième écran « tablette » dans le protocole de 36Screenlink :
 l'agent du PC lui envoie un flux H.264, et c'est le téléviseur qui se connecte au PC (une page web

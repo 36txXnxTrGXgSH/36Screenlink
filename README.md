@@ -53,7 +53,7 @@ Une tablette et un téléphone peuvent être connectés ensemble, en USB ou en W
 
 ## Télévision Samsung (Tizen)
 
-Un téléviseur Samsung sous Tizen 5.5 ou plus récent peut lui aussi afficher l'écran du PC, à faible latence (environ 80 ms de bout en bout, 1080p à 60 images/s, jusqu'à 30 Mb/s). L'image passe directement au décodeur matériel du téléviseur par son lecteur WebAssembly, sans le tampon d'une demi-seconde d'un lecteur web ordinaire.
+Un téléviseur Samsung sous Tizen 5.5 ou plus récent peut lui aussi afficher l'écran du PC, à faible latence (60 à 85 ms selon l'image, 1080p à 60 images/s, jusqu'à 30 Mb/s ; détail plus bas). L'image passe directement au décodeur matériel du téléviseur par son lecteur WebAssembly, sans le tampon d'une demi-seconde d'un lecteur web ordinaire.
 
 - **Réseau local seulement :** le téléviseur ne contacte que le PC, sur le réseau local, en flux chiffré. Rien ne sort vers Internet, aucun compte, aucun serveur.
 - **Connexion :** ouvrez l'application sur le téléviseur ; elle cherche le PC sur le réseau et affiche un code à 6 chiffres. Comparez-le avec celui du PC, puis confirmez avec la touche **OK** de la télécommande.
@@ -70,7 +70,17 @@ Un téléviseur Samsung sous Tizen 5.5 ou plus récent peut lui aussi afficher l
 - **Menu :** un appui sur le bouton Chaîne (ou la touche Menu d'une autre télécommande) ouvre le menu : choix du pilotage, affichage (étendu, dupliqué, télévision seule), menu Démarrer, afficher le bureau, changer de fenêtre, saisie d'un texte avec le clavier du téléviseur, mesures, quitter.
 - **Hors affichage du PC**, la télécommande retrouve son usage normal (volume et chaînes du téléviseur). Les touches Netflix, Prime Video, Rakuten et Accueil restent au téléviseur : le système les réserve. Sur l'UAC ou l'écran de verrouillage du PC, la télécommande n'agit pas.
 - **Appairage :** OK confirme le code. Pour appairer un autre PC, appuyez sur le bouton Chaîne quand l'écran du PC n'est pas affiché, ou choisissez *Autoriser un nouvel appairage* dans le menu. Les touches 123, micro et mode Ambiant ne sont pas utilisables : comme Netflix, Prime Video et Rakuten, le téléviseur les garde pour lui.
-- **Qualité et retard :** l'image est fluide et nette ; le retard d'environ 80 ms convient pour regarder, présenter ou suivre un tableau de bord, mais reste trop élevé pour un travail fin à la souris. Environ 70 ms viennent du lecteur vidéo du téléviseur lui-même ; pour aller plus bas, il faut un câble HDMI et le *Mode Jeu*.
+- **Performances mesurées** sur un Samsung UE55TU8005 (gamme 2020, **Tizen 5.5**, navigateur Chromium 69), avec un PC équipé d'une RTX 3080 :
+
+  | Mesure | Résultat |
+  |---|---|
+  | Image | 1920×1080, 60 images/s, H.264, débit réglé tout seul jusqu'à 30 Mb/s |
+  | Latence, vidéo plein écran | 75 à 85 ms en moyenne (médiane 82 ms, 95 % des images sous 135 ms), vers 28 Mb/s |
+  | Latence, écran peu animé | 60 à 75 ms (bureau, documents) |
+  | Stabilité | 15 min de vidéo à 60 images/s : chaque minute entre 75 et 85 ms, sans dérive |
+  | Où passe le temps | PC et réseau : 7 à 17 ms (encodage 2 à 6 ms, chiffrement sous 1 ms) ; lecteur vidéo du téléviseur : environ 65 ms, fixe sur ce modèle |
+
+  La latence va de la capture sur le PC à l'instant où le lecteur du téléviseur présente l'image, horloges synchronisées. Elle n'inclut pas les traitements d'image propres au téléviseur, qui dépendent de ses réglages. Environ 80 ms conviennent pour regarder, présenter ou suivre un tableau de bord, mais restent trop élevés pour un travail fin à la souris : pour cela, un câble HDMI et le *Mode Jeu* restent plus rapides.
 - **Réglage conseillé du téléviseur :** désactivez *Clarté de l'image* (Auto Motion Plus), *Contraste numérique* et *Amélioration du contraste* : ces traitements ajoutent du retard après l'affichage. En mode d'image *Dynamique* ou *Vif*, les couleurs paraissent criardes ; *Film* ou *Standard* donne un rendu fidèle.
 
 - **Son :** le menu du téléviseur choisit où sort le son du PC, sur le PC ou sur le téléviseur.

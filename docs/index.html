@@ -134,6 +134,7 @@
     </div>
     <ul class="pastilles">
       <li>Tablette ou téléphone</li>
+      <li>Téléviseur Samsung</li>
       <li>USB et Wi-Fi</li>
       <li>Jusqu'à 144 Hz</li>
       <li>Tactile, clavier, stylet</li>
@@ -204,6 +205,55 @@
         <svg viewBox="0 0 240 110" role="img" aria-label="Le moniteur est éteint, seul l'appareil affiche"><rect x="6" y="14" width="130" height="82" rx="6" fill="#0b0f15" stroke="#2a3340"/><rect x="150" y="26" width="84" height="58" rx="6" fill="#155e75"/><circle cx="192" cy="55" r="12" fill="#22d3ee"/></svg>
         <h3>Tablette ou téléphone seul</h3><p>L'écran du PC s'éteint. Il revient tout seul environ 15 s après une déconnexion.</p>
       </div>
+    </div>
+  </div>
+</section>
+
+<section id="television">
+  <div class="page duo">
+    <svg viewBox="0 0 520 320" role="img" aria-label="Un téléviseur affiche le bureau du PC, piloté par une télécommande" style="width:100%;height:auto">
+      <rect x="10" y="20" width="400" height="232" rx="10" fill="#141922" stroke="#2a3340" stroke-width="2"/>
+      <rect x="24" y="34" width="372" height="204" rx="4" fill="#155e75"/>
+      <rect x="24" y="214" width="372" height="24" fill="#0b0f15" opacity=".7"/>
+      <rect x="60" y="62" width="150" height="100" rx="6" fill="#22d3ee" opacity=".85"/>
+      <rect x="60" y="62" width="150" height="18" rx="6" fill="#0e7490"/>
+      <rect x="232" y="92" width="130" height="90" rx="6" fill="#312e81"/>
+      <path d="M262 128l0 26 7-6 5 11 5-2-5-11 9-1z" fill="#fff"/>
+      <rect x="190" y="252" width="40" height="22" fill="#2a3340"/>
+      <rect x="150" y="272" width="120" height="8" rx="4" fill="#2a3340"/>
+      <rect x="440" y="140" width="56" height="168" rx="28" fill="#141922" stroke="#2a3340" stroke-width="2"/>
+      <circle cx="468" cy="190" r="18" fill="none" stroke="#a7b3c2" stroke-width="3"/>
+      <circle cx="468" cy="190" r="7" fill="#22d3ee"/>
+      <rect x="456" y="226" width="24" height="8" rx="4" fill="#a7b3c2"/>
+      <rect x="456" y="244" width="24" height="8" rx="4" fill="#a7b3c2"/>
+    </svg>
+    <div>
+      <h2>Et sur le téléviseur Samsung</h2>
+      <p class="chapeau">Un téléviseur Samsung sous Tizen affiche l'écran du PC en 1080p à 60 images/s. L'image va directement à son décodeur matériel, sans la demi-seconde de tampon d'un lecteur web ordinaire.</p>
+      <ul class="points">
+        <li><strong>Télécommande :</strong> la croix déplace le pointeur, OK clique (maintenu : clic droit), Chaîne +/− fait défiler, Retour fait Échap.</li>
+        <li><strong>Menu</strong> par le bouton Chaîne : étendu, dupliqué ou télévision seule, son sur le PC ou le téléviseur, raccourcis Windows, saisie de texte.</li>
+        <li><strong>Dupliquer</strong> garde la résolution du PC : un écran ultra-large ou 4K est réduit pour le téléviseur, avec des bandes noires, sans déformation.</li>
+        <li><strong>Réseau local seulement</strong>, flux chiffré, appairage par code comme pour la tablette.</li>
+      </ul>
+    </div>
+  </div>
+  <div class="page">
+    <h3 style="margin-top:40px">Performances mesurées</h3>
+    <table>
+      <tr><th>Mesure</th><th>Résultat</th></tr>
+      <tr><td>Image</td><td>1920×1080, 60 images/s, H.264, débit réglé tout seul jusqu'à 30 Mb/s</td></tr>
+      <tr><td>Latence, vidéo plein écran</td><td>75 à 85 ms en moyenne (médiane 82 ms, 95 % des images sous 135 ms), vers 28 Mb/s</td></tr>
+      <tr><td>Latence, écran peu animé</td><td>60 à 75 ms (bureau, documents)</td></tr>
+      <tr><td>Stabilité</td><td>15 min de vidéo à 60 images/s : chaque minute entre 75 et 85 ms, sans dérive</td></tr>
+      <tr><td>Où passe le temps</td><td>PC et réseau : 7 à 17 ms (encodage 2 à 6 ms, chiffrement sous 1 ms) ; lecteur vidéo du téléviseur : environ 65 ms, fixe sur ce modèle</td></tr>
+      <tr><td>Testé sur</td><td>Samsung UE55TU8005 (gamme 2020), <strong>Tizen 5.5</strong> (navigateur Chromium 69) ; PC avec RTX 3080</td></tr>
+    </table>
+    <div class="note">
+      La latence est mesurée de la capture sur le PC à l'instant où le lecteur du téléviseur présente l'image, horloges synchronisées.
+      Elle n'inclut pas les traitements d'image propres au téléviseur, qui dépendent de ses réglages : désactivez <em>Clarté de l'image</em>
+      et <em>Contraste numérique</em> pour les réduire. Environ 80 ms conviennent pour regarder, présenter ou suivre un tableau de bord,
+      moins pour un travail fin à la souris : pour cela, un câble HDMI et le <em>Mode Jeu</em> restent plus rapides.
     </div>
   </div>
 </section>
@@ -317,17 +367,19 @@
       <tr><td><code>36Screenlink-Setup.exe</code></td><td>Usage normal : démarre avec Windows, sans invite UAC.</td></tr>
       <tr><td><code>36Screenlink-Portable.zip</code></td><td>Sans installation, depuis un dossier ou une clé USB. Une invite administrateur s'affiche à chaque lancement, et les fenêtres administrateur, le verrouillage et l'UAC restent hors de portée.</td></tr>
       <tr><td><code>36Screenlink.apk</code></td><td>À installer sur l'appareil Android, dans les deux cas.</td></tr>
+      <tr><td><code>36Screenlink-TV.wgt</code></td><td>Téléviseur Samsung. Non signé : un téléviseur n'installe que des applications signées pour lui. L'outil gratuit Apps2Samsung le signe avec votre compte Samsung et l'installe, une fois le téléviseur en mode développeur.</td></tr>
     </table>
     <h3 style="margin-top:36px">Configuration requise</h3>
     <table>
       <tr><td>PC</td><td>Windows 10 22H2 ou Windows 11, 64 bits</td></tr>
       <tr><td>GPU</td><td>NVIDIA, AMD ou Intel, dédié ou intégré au processeur, avec encodage vidéo matériel HEVC ou H.264 et pilote à jour</td></tr>
       <tr><td>Appareil</td><td>Android 11 ou plus récent</td></tr>
+      <tr><td>Téléviseur</td><td>Samsung sous Tizen 5.5 (gamme 2020) ou plus récent, sur le même réseau que le PC</td></tr>
       <tr><td>Wi-Fi</td><td>PC et appareil sur le même réseau</td></tr>
       <tr><td>USB</td><td>Débogage USB actif sur l'appareil, et option USB cochée à l'installation</td></tr>
     </table>
     <div class="note">
-      <strong>À savoir.</strong> 36Screenlink n'a été testé qu'avec une RTX 3080, une tablette Lenovo Idea Tab Pro et un téléphone Motorola edge 60.
+      <strong>À savoir.</strong> 36Screenlink n'a été testé qu'avec une RTX 3080, une tablette Lenovo Idea Tab Pro, un téléphone Motorola edge 60 et un téléviseur Samsung UE55TU8005 (Tizen 5.5).
       Sur ce téléphone, l'écran Windows tourne en 2400×1080 à 60 Hz : sa définition exacte et 120 Hz ne sont pas encore proposés.
       Les GPU AMD et Intel n'ont pas encore été essayés sur du vrai matériel, et le stylet n'a pas été essayé avec un vrai stylet.
       Windows peut refuser le pilote sur certains PC, notamment avec Smart App Control.
