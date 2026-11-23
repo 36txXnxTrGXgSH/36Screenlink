@@ -16,8 +16,8 @@ android {
         applicationId = "com.screenlink36.app"
         minSdk = 30
         targetSdk = 36
-        versionCode = 14
-        versionName = "2.0.0"
+        versionCode = 15
+        versionName = "2.0.1"
     }
 
     signingConfigs {

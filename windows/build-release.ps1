@@ -1,7 +1,7 @@
 ﻿# Construit tout ce qui se publie : dist\release\36Screenlink-Setup.exe, 36Screenlink.apk,
 # 36Screenlink-Portable.zip et 36Screenlink-TV.wgt (téléviseur Samsung, non signé).
 # Aucune donnée locale ne peut y entrer : l'installateur ne prend que les fichiers qu'il liste.
-param([string]$Version = '2.0.0')
+param([string]$Version = '2.0.1')
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot
 $out = Join-Path $root 'dist\release'

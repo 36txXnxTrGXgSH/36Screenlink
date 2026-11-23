@@ -46,7 +46,7 @@ Une tablette et un téléphone peuvent être connectés ensemble, en USB ou en W
 
 - **Appairage :** chaque appareil a sa propre clé. Pour en ajouter un second, ouvrez l'application sur cet appareil, touchez *Nouvel appairage*, puis comparez le code. Le premier reste appairé.
 - **Réglages :** mode d'affichage, fréquence et orientation se règlent depuis le menu de chaque appareil, pour lui seul.
-- **Son :** la *Sortie son* de chaque menu propose le PC, cet appareil et l'autre appareil. Le son part vers un seul appareil à la fois.
+- **Son :** la *Sortie son* de chaque menu propose le PC, cet appareil et chacun des autres appareils connectés, téléviseur compris. Le son part vers un seul appareil à la fois.
 - **Glisser une icône :** le choix d'écran montre les trois écrans ; celui de l'autre appareil s'appelle « Autre appareil ».
 - **Arrivée ou départ d'un appareil :** Windows réorganise les écrans. L'image de l'autre appareil se coupe alors environ deux secondes, le temps de repartir à la bonne place.
 - **Affichage :** *Tablette seule* (ou *Téléphone seul*) ne garde que cet appareil : l'écran du PC s'éteint et l'autre appareil attend. *Tablette et téléphone* éteint seulement l'écran du PC : les deux appareils restent allumés. *Étendu* rallume tout.
@@ -83,7 +83,7 @@ Un téléviseur Samsung sous Tizen 5.5 ou plus récent peut lui aussi afficher l
   La latence va de la capture sur le PC à l'instant où le lecteur du téléviseur présente l'image, horloges synchronisées. Elle n'inclut pas les traitements d'image propres au téléviseur, qui dépendent de ses réglages. Environ 80 ms conviennent pour regarder, présenter ou suivre un tableau de bord, mais restent trop élevés pour un travail fin à la souris : pour cela, un câble HDMI et le *Mode Jeu* restent plus rapides.
 - **Réglage conseillé du téléviseur :** désactivez *Clarté de l'image* (Auto Motion Plus), *Contraste numérique* et *Amélioration du contraste* : ces traitements ajoutent du retard après l'affichage. En mode d'image *Dynamique* ou *Vif*, les couleurs paraissent criardes ; *Film* ou *Standard* donne un rendu fidèle.
 
-- **Son :** le menu du téléviseur choisit où sort le son du PC, sur le PC ou sur le téléviseur.
+- **Son :** le menu du téléviseur choisit où sort le son du PC : sur le PC, le téléviseur, ou la tablette et le téléphone connectés.
 - **Dupliquer** garde l'écran du PC dans sa résolution ; un écran ultra-large ou 4K est réduit pour le téléviseur, avec des bandes noires, sans déformation. Préférez ce menu à la duplication de Windows (Win+P), qui impose la même résolution aux deux écrans.
 
 **Installation :** l'application n'est pas publiée sur le magasin Samsung, et le paquet `36Screenlink-TV.wgt` de la release n'est pas signé : un téléviseur n'accepte que les applications signées par un certificat Samsung lié à lui. Le plus simple est l'outil gratuit **Apps2Samsung**, qui crée ce certificat avec votre compte Samsung, signe le `.wgt` et l'installe : passez le téléviseur en mode développeur (dans Applications, tapez 1 2 3 4 5 à la télécommande), indiquez l'adresse IP du PC, redémarrez le téléviseur, puis ouvrez le `.wgt` dans Apps2Samsung. Avec le kit Tizen Studio, le script [`tv/deploy-tv.ps1`](tv/) fait la même chose. C'est une prise en charge avancée, testée sur un Samsung UE55TU8005 (2020, Tizen 5.5).
@@ -155,7 +155,7 @@ Paramètres Windows > Applications > 36Screenlink > Désinstaller. Le pilote, le
 Prérequis : Visual Studio 2022 ou Build Tools avec C++, Windows SDK 10.0.26100, Android SDK, JDK 17 et Inno Setup 6. Une APK finale exige un `android/keystore.properties` à vous, jamais versionné, avec `storeFile`, `storePassword`, `keyAlias` et `keyPassword`.
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File windows/build-release.ps1 -Version 2.0.0
+powershell -ExecutionPolicy Bypass -File windows/build-release.ps1 -Version 2.0.1
 ```
 
 Le résultat se trouve dans `dist/release`.
